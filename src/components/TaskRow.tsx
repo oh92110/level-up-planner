@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { motion } from 'framer-motion'
 import { useStore } from '../store'
 import { formatDuration, relativeDue } from '../lib/dates'
 import { PRIORITY_META } from '../lib/types'
@@ -40,13 +41,19 @@ export function TaskRow({
 
   return (
     <>
-      <div
+      <motion.div
+        layout="position"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0, height: 0, marginTop: 0, marginBottom: 0 }}
+        transition={{ duration: 0.22 }}
         className={`group flex items-start gap-3 rounded-xl px-3 py-2.5 -mx-1 transition-colors
           hover:bg-ink-850 ${emphasis ? 'bg-ink-850/60' : ''}`}
       >
-        <button
+        <motion.button
           onClick={onToggle}
           disabled={busy}
+          whileTap={{ scale: 0.85 }}
           aria-label={task.completed ? `Mark ${task.name} not done` : `Complete ${task.name}`}
           className={`mt-0.5 h-5 w-5 shrink-0 rounded-md border-2 flex items-center justify-center
             transition-colors ${
@@ -55,16 +62,25 @@ export function TaskRow({
                 : 'border-ink-600 hover:border-accent text-transparent'
             }`}
         >
-          <svg viewBox="0 0 12 12" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <motion.svg
+            viewBox="0 0 12 12"
+            className="h-3 w-3"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            initial={false}
+            animate={{ scale: task.completed ? 1 : 0 }}
+            transition={{ type: 'spring', stiffness: 500, damping: 22 }}
+          >
             <path d="M2 6.5 4.5 9 10 3" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </button>
+          </motion.svg>
+        </motion.button>
 
         <button onClick={() => setEditing(true)} className="flex-1 min-w-0 text-left">
           <div className="flex items-baseline gap-2">
             {!task.completed && <span className="text-[11px] leading-none shrink-0">{meta.dot}</span>}
             <span
-              className={`text-sm leading-snug ${
+              className={`text-sm leading-snug transition-colors duration-300 ${
                 task.completed ? 'line-through text-slate-500' : emphasis ? 'font-medium text-slate-100' : 'text-slate-200'
               }`}
             >
@@ -83,7 +99,7 @@ export function TaskRow({
             )}
           </div>
         </button>
-      </div>
+      </motion.div>
 
       <TaskForm open={editing} onClose={() => setEditing(false)} task={task} />
     </>

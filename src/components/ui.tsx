@@ -1,10 +1,27 @@
-import { useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { motion } from 'framer-motion'
 import { PRIORITY_META } from '../lib/types'
 import type { Priority } from '../lib/types'
 
-export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
-  return <div className={`card p-4 sm:p-5 ${className}`}>{children}</div>
+export function Card({
+  children,
+  className = '',
+  hoverable = false,
+}: {
+  children: ReactNode
+  className?: string
+  hoverable?: boolean
+}) {
+  return (
+    <div
+      className={`card p-4 sm:p-5 transition-[transform,box-shadow,border-color] duration-200 ${
+        hoverable ? 'hover:-translate-y-0.5 hover:border-ink-600 hover:shadow-lg' : ''
+      } ${className}`}
+    >
+      {children}
+    </div>
+  )
 }
 
 export function SectionHeading({
@@ -45,11 +62,14 @@ export function ProgressBar({
   tone?: 'accent' | 'good'
 }) {
   const color = tone === 'good' ? 'bg-lo' : 'bg-accent'
+  const pct = Math.max(0, Math.min(100, value))
   return (
     <div className={`h-1.5 w-full rounded-full bg-ink-800 overflow-hidden ${className}`}>
-      <div
-        className={`h-full rounded-full ${color} transition-[width] duration-500`}
-        style={{ width: `${Math.max(0, Math.min(100, value))}%` }}
+      <motion.div
+        className={`h-full rounded-full ${color}`}
+        initial={{ width: 0 }}
+        animate={{ width: `${pct}%` }}
+        transition={{ type: 'spring', stiffness: 120, damping: 20 }}
       />
     </div>
   )
@@ -68,6 +88,20 @@ export function Modal({
   children: ReactNode
   wide?: boolean
 }) {
+  const [mounted, setMounted] = useState(open)
+  const [visible, setVisible] = useState(false)
+
+  useEffect(() => {
+    if (open) {
+      setMounted(true)
+      const id = requestAnimationFrame(() => setVisible(true))
+      return () => cancelAnimationFrame(id)
+    }
+    setVisible(false)
+    const timeout = window.setTimeout(() => setMounted(false), 200)
+    return () => window.clearTimeout(timeout)
+  }, [open])
+
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
@@ -81,13 +115,22 @@ export function Modal({
     }
   }, [open, onClose])
 
-  if (!open) return null
+  if (!mounted) return null
+
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
+      <div
+        className={`absolute inset-0 bg-black/70 backdrop-blur-sm transition-opacity duration-200 ${
+          visible ? 'opacity-100' : 'opacity-0'
+        }`}
+        onClick={onClose}
+      />
       <div
         className={`relative w-full ${wide ? 'sm:max-w-2xl' : 'sm:max-w-lg'} max-h-[92dvh] overflow-y-auto
-          bg-ink-900 border border-ink-700 rounded-t-2xl sm:rounded-2xl shadow-2xl`}
+          bg-ink-900 border border-ink-700 rounded-t-2xl sm:rounded-2xl shadow-2xl
+          transition-[opacity,transform] duration-200 ease-out ${
+            visible ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-6 scale-[0.98]'
+          }`}
         role="dialog"
         aria-modal="true"
       >
@@ -105,10 +148,15 @@ export function Modal({
 
 export function Empty({ icon, text }: { icon: string; text: string }) {
   return (
-    <div className="text-center py-8 px-4">
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.3 }}
+      className="text-center py-8 px-4"
+    >
       <div className="text-2xl mb-2 opacity-60">{icon}</div>
       <p className="text-sm text-slate-500">{text}</p>
-    </div>
+    </motion.div>
   )
 }
 
@@ -120,6 +168,29 @@ export function Stat({ label, value, sub }: { label: string; value: ReactNode; s
       {sub && <p className="text-xs text-slate-500 mt-1.5">{sub}</p>}
     </div>
   )
+}
+
+export function AnimatedNumber({ value, duration = 500 }: { value: number; duration?: number }) {
+  const [display, setDisplay] = useState(value)
+  const fromRef = useRef(value)
+
+  useEffect(() => {
+    const from = fromRef.current
+    if (from === value) return
+    const start = performance.now()
+    let frame: number
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / duration)
+      const eased = 1 - Math.pow(1 - t, 3)
+      setDisplay(Math.round(from + (value - from) * eased))
+      if (t < 1) frame = requestAnimationFrame(tick)
+      else fromRef.current = value
+    }
+    frame = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(frame)
+  }, [value, duration])
+
+  return <>{display}</>
 }
 
 export function Field({ label, children }: { label: string; children: ReactNode }) {

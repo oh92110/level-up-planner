@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useStore } from '../store'
 import { Field, Modal } from './ui'
+import { useToast } from './Toast'
 import { today } from '../lib/dates'
 import { WEEKDAYS } from '../lib/types'
 import type { Priority, Task } from '../lib/types'
@@ -50,6 +51,7 @@ export function TaskForm({
   defaults?: Partial<Draft>
 }) {
   const { addTask, updateTask, deleteTask, addRecurring, projects, milestones } = useStore()
+  const toast = useToast()
   const [d, setD] = useState<Draft>(() => draftFrom(task, defaults))
   const [saving, setSaving] = useState(false)
 
@@ -77,6 +79,7 @@ export function TaskForm({
           interval_weeks: 1,
           project_id: d.project_id || null,
         })
+        toast('Recurring task added', 'success')
       } else {
         const payload = {
           name: d.name.trim(),
@@ -88,8 +91,13 @@ export function TaskForm({
           project_id: d.project_id || null,
           milestone_id: d.milestone_id || null,
         }
-        if (task) await updateTask(task.id, payload)
-        else await addTask(payload)
+        if (task) {
+          await updateTask(task.id, payload)
+          toast('Task updated', 'success')
+        } else {
+          await addTask(payload)
+          toast('Task added', 'success')
+        }
       }
       onClose()
     } finally {
@@ -102,6 +110,7 @@ export function TaskForm({
     setSaving(true)
     try {
       await deleteTask(task.id)
+      toast('Task deleted')
       onClose()
     } finally {
       setSaving(false)

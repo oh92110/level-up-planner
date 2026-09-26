@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useStore } from '../store'
 import { Modal } from './ui'
+import { useToast } from './Toast'
 import { addDays, formatDuration, today } from '../lib/dates'
 import { missedTasks } from '../lib/engine'
 import type { Task } from '../lib/types'
@@ -32,13 +33,15 @@ export function MissedTaskPrompt() {
 
 function MissedTaskCard({ task, onResolved, onSkip }: { task: Task; onResolved: () => void; onSkip: () => void }) {
   const { updateTask, deleteTask } = useStore()
+  const toast = useToast()
   const [busy, setBusy] = useState(false)
 
-  async function apply(patch: Partial<Task> | null) {
+  async function apply(patch: Partial<Task> | null, message: string) {
     setBusy(true)
     try {
       if (patch === null) await deleteTask(task.id)
       else await updateTask(task.id, patch)
+      toast(message)
       onResolved()
     } finally {
       setBusy(false)
@@ -62,7 +65,10 @@ function MissedTaskCard({ task, onResolved, onSkip }: { task: Task; onResolved: 
           <button
             disabled={busy}
             onClick={() =>
-              apply({ scheduled_date: today(), due_date: task.due_date, deferred_count: task.deferred_count + 1 })
+              apply(
+                { scheduled_date: today(), due_date: task.due_date, deferred_count: task.deferred_count + 1 },
+                'Rescheduled to today',
+              )
             }
             className="btn-ghost justify-start"
           >
@@ -71,7 +77,10 @@ function MissedTaskCard({ task, onResolved, onSkip }: { task: Task; onResolved: 
           <button
             disabled={busy}
             onClick={() =>
-              apply({ scheduled_date: addDays(today(), 1), deferred_count: task.deferred_count + 1 })
+              apply(
+                { scheduled_date: addDays(today(), 1), deferred_count: task.deferred_count + 1 },
+                'Pushed to tomorrow',
+              )
             }
             className="btn-ghost justify-start"
           >
@@ -79,14 +88,18 @@ function MissedTaskCard({ task, onResolved, onSkip }: { task: Task; onResolved: 
           </button>
           <button
             disabled={busy}
-            onClick={() => apply({ duration_min: Math.max(15, Math.round(task.duration_min / 2)) })}
+            onClick={() =>
+              apply({ duration_min: Math.max(15, Math.round(task.duration_min / 2)) }, 'Shrunk to a smaller step')
+            }
             className="btn-ghost justify-start"
           >
             Break it into a smaller step
           </button>
           <button
             disabled={busy}
-            onClick={() => apply({ priority: task.priority === 'high' ? 'medium' : 'low' })}
+            onClick={() =>
+              apply({ priority: task.priority === 'high' ? 'medium' : 'low' }, 'Priority lowered')
+            }
             className="btn-ghost justify-start"
           >
             Lower the priority
@@ -94,13 +107,17 @@ function MissedTaskCard({ task, onResolved, onSkip }: { task: Task; onResolved: 
           {task.project_id && (
             <button
               disabled={busy}
-              onClick={() => apply({ scheduled_date: null, due_date: null })}
+              onClick={() => apply({ scheduled_date: null, due_date: null }, 'Moved back into the backlog')}
               className="btn-ghost justify-start"
             >
               Move back into the project backlog
             </button>
           )}
-          <button disabled={busy} onClick={() => apply(null)} className="btn-ghost justify-start text-hi hover:bg-hi/10">
+          <button
+            disabled={busy}
+            onClick={() => apply(null, 'Deleted')}
+            className="btn-ghost justify-start text-hi hover:bg-hi/10"
+          >
             Delete it
           </button>
         </div>

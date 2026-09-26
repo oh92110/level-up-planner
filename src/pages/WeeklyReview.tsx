@@ -1,12 +1,15 @@
 import { useMemo, useState } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 import { useStore } from '../store'
 import { Card, Field, ProgressBar, SectionHeading } from '../components/ui'
+import { useToast } from '../components/Toast'
 import { projectProgress } from '../lib/engine'
 import { addDays, formatShort, today, weekStart } from '../lib/dates'
 import { PRIORITY_META } from '../lib/types'
 
 export function WeeklyReview({ onClose }: { onClose: () => void }) {
   const { tasks, projects, milestones, commitments, saveReview, reviews } = useStore()
+  const toast = useToast()
   const ref = today()
   const thisWeekStart = weekStart(ref)
   const lastWeekStart = addDays(thisWeekStart, -7)
@@ -45,14 +48,26 @@ export function WeeklyReview({ onClose }: { onClose: () => void }) {
     try {
       await saveReview({ week_start: thisWeekStart, reflection, next_week_focus: focus })
       setSaved(true)
+      toast('Weekly review saved', 'success')
     } finally {
       setSaving(false)
     }
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-ink-950 overflow-y-auto">
-      <div className="max-w-xl mx-auto px-4 py-8 pb-20">
+    <motion.div
+      className="fixed inset-0 z-50 bg-ink-950 overflow-y-auto"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+    >
+      <motion.div
+        className="max-w-xl mx-auto px-4 py-8 pb-20"
+        initial={{ opacity: 0, y: 16 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.25, delay: 0.05 }}
+      >
         <div className="flex items-center justify-between mb-1">
           <h1 className="text-xl font-bold text-slate-100">Weekly review</h1>
           <button onClick={onClose} className="btn-quiet px-2 py-1">
@@ -155,19 +170,34 @@ export function WeeklyReview({ onClose }: { onClose: () => void }) {
           </Field>
         </div>
 
-        {saved ? (
-          <div className="text-center">
-            <p className="text-sm text-lo mb-3">Review saved.</p>
-            <button onClick={onClose} className="btn-primary w-full">
-              Back to Today
-            </button>
-          </div>
-        ) : (
-          <button onClick={finish} disabled={saving} className="btn-primary w-full">
-            {saving ? 'Saving…' : 'Finish review'}
-          </button>
-        )}
-      </div>
-    </div>
+        <AnimatePresence initial={false}>
+          {saved ? (
+            <motion.div
+              key="saved"
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ type: 'spring', stiffness: 320, damping: 24 }}
+              className="text-center"
+            >
+              <p className="text-sm text-lo mb-3">✓ Review saved.</p>
+              <button onClick={onClose} className="btn-primary w-full">
+                Back to Today
+              </button>
+            </motion.div>
+          ) : (
+            <motion.button
+              key="finish"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              onClick={finish}
+              disabled={saving}
+              className="btn-primary w-full"
+            >
+              {saving ? 'Saving…' : 'Finish review'}
+            </motion.button>
+          )}
+        </AnimatePresence>
+      </motion.div>
+    </motion.div>
   )
 }

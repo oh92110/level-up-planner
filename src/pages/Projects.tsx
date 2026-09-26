@@ -1,6 +1,8 @@
 import { useState } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 import { useStore } from '../store'
 import { Card, Empty, Field, Modal, PriorityChip, ProgressBar, SectionHeading } from '../components/ui'
+import { useToast } from '../components/Toast'
 import { TaskForm } from '../components/TaskForm'
 import { currentMilestone, nextActionFor, projectProgress } from '../lib/engine'
 import { relativeDue } from '../lib/dates'
@@ -29,11 +31,29 @@ export function Projects() {
       {active.length === 0 ? (
         <Empty icon="🚀" text="No projects yet. Add one to break a big goal into milestones." />
       ) : (
-        <div className="space-y-3">
-          {active.map((p) => (
-            <ProjectCard key={p.id} project={p} onOpen={() => setOpen(p)} />
-          ))}
-        </div>
+        <motion.div
+          className="space-y-3"
+          initial="hidden"
+          animate="show"
+          variants={{ show: { transition: { staggerChildren: 0.05 } } }}
+        >
+          <AnimatePresence>
+            {active.map((p) => (
+              <motion.div
+                key={p.id}
+                layout
+                variants={{
+                  hidden: { opacity: 0, y: 12 },
+                  show: { opacity: 1, y: 0 },
+                }}
+                exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.15 } }}
+                transition={{ type: 'spring', stiffness: 300, damping: 28 }}
+              >
+                <ProjectCard project={p} onOpen={() => setOpen(p)} />
+              </motion.div>
+            ))}
+          </AnimatePresence>
+        </motion.div>
       )}
 
       <ProjectEditor open={showAdd} onClose={() => setShowAdd(false)} />
@@ -52,7 +72,7 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void
 
   return (
     <button onClick={onOpen} className="w-full text-left">
-      <Card className="hover:border-ink-600 transition-colors">
+      <Card hoverable>
         <div className="flex items-start justify-between gap-3 mb-2">
           <div className="min-w-0">
             <h3 className="font-semibold text-slate-100 truncate">{project.name}</h3>
@@ -93,6 +113,7 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void
 
 function ProjectDetail({ project, onClose }: { project: Project; onClose: () => void }) {
   const { milestones, tasks, addMilestone, updateMilestone, deleteMilestone, deleteProject } = useStore()
+  const toast = useToast()
   const [newMilestone, setNewMilestone] = useState('')
   const [editing, setEditing] = useState(false)
   const [addTaskFor, setAddTaskFor] = useState<{ milestoneId?: string } | null>(null)
@@ -105,7 +126,13 @@ function ProjectDetail({ project, onClose }: { project: Project; onClose: () => 
   async function addMs() {
     if (!newMilestone.trim()) return
     await addMilestone({ project_id: project.id, name: newMilestone.trim() })
+    toast('Milestone added', 'success')
     setNewMilestone('')
+  }
+
+  async function toggleMilestone(m: Milestone) {
+    await updateMilestone(m.id, { completed: !m.completed })
+    if (!m.completed) toast(`🎉 Milestone complete: ${m.name}`, 'success')
   }
 
   return (
@@ -129,16 +156,18 @@ function ProjectDetail({ project, onClose }: { project: Project; onClose: () => 
         <div>
           <SectionHeading title="Milestones" />
           <div className="space-y-1.5">
-            {mine.map((m) => (
-              <MilestoneRow
-                key={m.id}
-                milestone={m}
-                taskCount={tasks.filter((t) => t.milestone_id === m.id && !t.completed).length}
-                onToggle={() => updateMilestone(m.id, { completed: !m.completed })}
-                onDelete={() => deleteMilestone(m.id)}
-                onAddTask={() => setAddTaskFor({ milestoneId: m.id })}
-              />
-            ))}
+            <AnimatePresence initial={false}>
+              {mine.map((m) => (
+                <MilestoneRow
+                  key={m.id}
+                  milestone={m}
+                  taskCount={tasks.filter((t) => t.milestone_id === m.id && !t.completed).length}
+                  onToggle={() => toggleMilestone(m)}
+                  onDelete={() => deleteMilestone(m.id)}
+                  onAddTask={() => setAddTaskFor({ milestoneId: m.id })}
+                />
+              ))}
+            </AnimatePresence>
           </div>
           <div className="flex gap-2 mt-2.5">
             <input
@@ -186,6 +215,7 @@ function ProjectDetail({ project, onClose }: { project: Project; onClose: () => 
               <button
                 onClick={async () => {
                   await deleteProject(project.id)
+                  toast('Project deleted')
                   onClose()
                 }}
                 className="btn-ghost text-xs text-hi hover:bg-hi/10 flex-1"
@@ -228,20 +258,35 @@ function MilestoneRow({
   onAddTask: () => void
 }) {
   return (
-    <div className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-ink-850 group">
-      <button
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: -6 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, height: 0, marginTop: 0, marginBottom: 0 }}
+      transition={{ duration: 0.2 }}
+      className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-ink-850 group"
+    >
+      <motion.button
         onClick={onToggle}
+        whileTap={{ scale: 0.85 }}
         className={`h-[18px] w-[18px] shrink-0 rounded-full border-2 flex items-center justify-center ${
           milestone.completed ? 'bg-lo border-lo' : 'border-ink-600'
         }`}
         aria-label={milestone.completed ? 'Mark not done' : 'Mark done'}
       >
-        {milestone.completed && (
-          <svg viewBox="0 0 12 12" className="h-2.5 w-2.5 text-ink-950" fill="none" stroke="currentColor" strokeWidth="3">
-            <path d="M2 6.5 4.5 9 10 3" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        )}
-      </button>
+        <motion.svg
+          viewBox="0 0 12 12"
+          className="h-2.5 w-2.5 text-ink-950"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="3"
+          initial={false}
+          animate={{ scale: milestone.completed ? 1 : 0 }}
+          transition={{ type: 'spring', stiffness: 500, damping: 22 }}
+        >
+          <path d="M2 6.5 4.5 9 10 3" strokeLinecap="round" strokeLinejoin="round" />
+        </motion.svg>
+      </motion.button>
       <span className={`flex-1 text-sm ${milestone.completed ? 'line-through text-slate-600' : 'text-slate-200'}`}>
         {milestone.name}
       </span>
@@ -255,7 +300,7 @@ function MilestoneRow({
       >
         ✕
       </button>
-    </div>
+    </motion.div>
   )
 }
 
@@ -263,6 +308,7 @@ const STATUSES: ProjectStatus[] = ['not_started', 'planning', 'in_progress', 'te
 
 function ProjectEditor({ open, onClose, project }: { open: boolean; onClose: () => void; project?: Project }) {
   const { addProject, updateProject } = useStore()
+  const toast = useToast()
   const [name, setName] = useState(project?.name ?? '')
   const [description, setDescription] = useState(project?.description ?? '')
   const [status, setStatus] = useState<ProjectStatus>(project?.status ?? 'not_started')
@@ -275,8 +321,13 @@ function ProjectEditor({ open, onClose, project }: { open: boolean; onClose: () 
     setSaving(true)
     try {
       const payload = { name: name.trim(), description, status, priority, deadline: deadline || null }
-      if (project) await updateProject(project.id, payload)
-      else await addProject(payload)
+      if (project) {
+        await updateProject(project.id, payload)
+        toast('Project updated', 'success')
+      } else {
+        await addProject(payload)
+        toast('Project created', 'success')
+      }
       onClose()
     } finally {
       setSaving(false)

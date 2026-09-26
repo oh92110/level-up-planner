@@ -1,12 +1,15 @@
 import { useState } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 import { useStore } from '../store'
 import { Card, Empty, Field, Modal, ProgressBar, SectionHeading } from '../components/ui'
+import { useToast } from '../components/Toast'
 import { projectProgress } from '../lib/engine'
 import { relativeDue } from '../lib/dates'
 import type { Goal } from '../lib/types'
 
 export function Goals() {
   const { goals, projects, milestones, updateGoal, deleteGoal } = useStore()
+  const toast = useToast()
   const [showAdd, setShowAdd] = useState(false)
   const [editing, setEditing] = useState<Goal | null>(null)
 
@@ -28,13 +31,26 @@ export function Goals() {
       {open.length === 0 ? (
         <Empty icon="🎯" text="No goals yet. Add one — every task and project should trace back to something here." />
       ) : (
-        <div className="space-y-3">
-          {open.map((g) => {
+        <motion.div
+          className="space-y-3"
+          initial="hidden"
+          animate="show"
+          variants={{ show: { transition: { staggerChildren: 0.05 } } }}
+        >
+          <AnimatePresence>
+            {open.map((g) => {
             const project = projects.find((p) => p.id === g.project_id)
             const progress = project ? projectProgress(project, milestones) : null
             const due = relativeDue(g.target_date)
             return (
-              <Card key={g.id} className="cursor-pointer">
+              <motion.div
+                key={g.id}
+                layout
+                variants={{ hidden: { opacity: 0, y: 12 }, show: { opacity: 1, y: 0 } }}
+                exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.15 } }}
+                transition={{ type: 'spring', stiffness: 300, damping: 28 }}
+              >
+              <Card className="cursor-pointer" hoverable>
                 <div onClick={() => setEditing(g)}>
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -59,22 +75,30 @@ export function Goals() {
                 </div>
                 <div className="flex gap-2 mt-3 pt-3 border-t border-ink-800">
                   <button
-                    onClick={() => updateGoal(g.id, { achieved: true })}
+                    onClick={() => {
+                      updateGoal(g.id, { achieved: true })
+                      toast(`🎉 Goal achieved: ${g.name}`, 'success')
+                    }}
                     className="btn-ghost text-xs flex-1"
                   >
                     Mark achieved
                   </button>
                   <button
-                    onClick={() => deleteGoal(g.id)}
+                    onClick={() => {
+                      deleteGoal(g.id)
+                      toast('Goal deleted')
+                    }}
                     className="btn-ghost text-xs text-hi hover:bg-hi/10"
                   >
                     Delete
                   </button>
                 </div>
               </Card>
+              </motion.div>
             )
-          })}
-        </div>
+            })}
+          </AnimatePresence>
+        </motion.div>
       )}
 
       {achieved.length > 0 && (
@@ -98,6 +122,7 @@ export function Goals() {
 
 function GoalEditor({ open, onClose, goal }: { open: boolean; onClose: () => void; goal?: Goal }) {
   const { addGoal, updateGoal, projects } = useStore()
+  const toast = useToast()
   const [name, setName] = useState(goal?.name ?? '')
   const [description, setDescription] = useState(goal?.description ?? '')
   const [targetDate, setTargetDate] = useState(goal?.target_date ?? '')
@@ -114,8 +139,13 @@ function GoalEditor({ open, onClose, goal }: { open: boolean; onClose: () => voi
         target_date: targetDate || null,
         project_id: projectId || null,
       }
-      if (goal) await updateGoal(goal.id, payload)
-      else await addGoal(payload)
+      if (goal) {
+        await updateGoal(goal.id, payload)
+        toast('Goal updated', 'success')
+      } else {
+        await addGoal(payload)
+        toast('Goal added', 'success')
+      }
       onClose()
     } finally {
       setSaving(false)

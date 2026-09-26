@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react'
+import { motion } from 'framer-motion'
 import { useStore } from '../store'
-import { Card, Empty, Field, Modal, ProgressBar, SectionHeading, Stat } from '../components/ui'
+import { AnimatedNumber, Card, Empty, Field, Modal, ProgressBar, SectionHeading, Stat } from '../components/ui'
+import { useToast } from '../components/Toast'
 import { projectProgress } from '../lib/engine'
 import { addDays, formatShort, today, weekStart } from '../lib/dates'
 import { STATUS_META } from '../lib/types'
@@ -40,20 +42,22 @@ export function Progress() {
       </header>
 
       <div className="grid grid-cols-2 gap-3 mb-5">
-        <Stat label="Done this week" value={doneThisWeek.length} />
-        <Stat label="Done all-time" value={doneAllTime} />
+        <Stat label="Done this week" value={<AnimatedNumber value={doneThisWeek.length} />} />
+        <Stat label="Done all-time" value={<AnimatedNumber value={doneAllTime} />} />
       </div>
 
       <div className="mb-6">
         <SectionHeading title="Last 7 days" />
         <Card>
           <div className="flex items-end justify-between gap-2 h-24">
-            {last7.map((d) => (
+            {last7.map((d, i) => (
               <div key={d.date} className="flex-1 flex flex-col items-center gap-1.5">
                 <div className="w-full flex-1 flex items-end">
-                  <div
+                  <motion.div
                     className="w-full rounded-md bg-accent/70"
-                    style={{ height: `${Math.max(4, (d.count / maxCount) * 100)}%` }}
+                    initial={{ height: 0 }}
+                    animate={{ height: `${Math.max(4, (d.count / maxCount) * 100)}%` }}
+                    transition={{ type: 'spring', stiffness: 200, damping: 22, delay: i * 0.04 }}
                     title={`${d.count} completed`}
                   />
                 </div>
@@ -114,11 +118,13 @@ export function Progress() {
                   </div>
                 </div>
                 <div className="flex items-end gap-1.5 h-16">
-                  {sortedScores.slice(-14).map((s) => (
-                    <div
+                  {sortedScores.slice(-14).map((s, i) => (
+                    <motion.div
                       key={s.id}
                       className="flex-1 rounded bg-accent/70"
-                      style={{ height: `${Math.max(6, (s.score / s.total) * 100)}%` }}
+                      initial={{ height: 0 }}
+                      animate={{ height: `${Math.max(6, (s.score / s.total) * 100)}%` }}
+                      transition={{ type: 'spring', stiffness: 200, damping: 22, delay: i * 0.03 }}
                       title={`${formatShort(s.taken_on)}: ${s.score}/${s.total}`}
                     />
                   ))}
@@ -152,6 +158,7 @@ export function Progress() {
 
 function ScoreForm({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { addScore } = useStore()
+  const toast = useToast()
   const [score, setScore] = useState(43)
   const [total, setTotal] = useState(50)
   const [hazard, setHazard] = useState(50)
@@ -162,6 +169,7 @@ function ScoreForm({ open, onClose }: { open: boolean; onClose: () => void }) {
     setSaving(true)
     try {
       await addScore({ score, total, hazard_score: hazard, taken_on: date })
+      toast(`Score logged: ${score}/${total}`, 'success')
       onClose()
     } finally {
       setSaving(false)

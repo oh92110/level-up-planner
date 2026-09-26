@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 import { useStore } from '../store'
 import { Card, Empty, PriorityChip, SectionHeading } from '../components/ui'
 import { TaskRow } from '../components/TaskRow'
@@ -78,17 +79,23 @@ export function Today() {
         <WhatNow />
       </div>
 
-      {wd === 0 && !reviewDoneThisWeek && (
-        <button
-          onClick={() => setShowReview(true)}
-          className="w-full text-left card !bg-accent/10 border-accent/30 p-4 mb-5 hover:!bg-accent/15 transition-colors"
-        >
-          <p className="text-sm font-semibold text-accent-soft">It's Sunday — do your weekly review</p>
-          <p className="text-xs text-slate-400 mt-1">
-            Quick look at what got done, what slipped, and the 3–5 things that matter next week.
-          </p>
-        </button>
-      )}
+      <AnimatePresence>
+        {wd === 0 && !reviewDoneThisWeek && (
+          <motion.button
+            initial={{ opacity: 0, y: -8, height: 0, marginBottom: 0 }}
+            animate={{ opacity: 1, y: 0, height: 'auto', marginBottom: 20 }}
+            exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+            transition={{ duration: 0.25 }}
+            onClick={() => setShowReview(true)}
+            className="w-full text-left card !bg-accent/10 border-accent/30 p-4 hover:!bg-accent/15 transition-colors overflow-hidden"
+          >
+            <p className="text-sm font-semibold text-accent-soft">It's Sunday — do your weekly review</p>
+            <p className="text-xs text-slate-400 mt-1">
+              Quick look at what got done, what slipped, and the 3–5 things that matter next week.
+            </p>
+          </motion.button>
+        )}
+      </AnimatePresence>
 
       {(work.length > 0 || training.length > 0 || other.length > 0) && (
         <Card className="mb-5">
@@ -123,9 +130,11 @@ export function Today() {
             <Empty icon="✨" text="Nothing urgent right now. Pull something forward from a project below." />
           ) : (
             <div className="divide-y divide-ink-800/60">
-              {top.map((s) => (
-                <TaskRow key={s.task.id} task={s.task} emphasis />
-              ))}
+              <AnimatePresence initial={false}>
+                {top.map((s) => (
+                  <TaskRow key={s.task.id} task={s.task} emphasis />
+                ))}
+              </AnimatePresence>
             </div>
           )}
         </Card>
@@ -136,9 +145,11 @@ export function Today() {
           <SectionHeading title="Also on today" />
           <Card className="!p-2">
             <div className="divide-y divide-ink-800/60">
-              {rest.map((s) => (
-                <TaskRow key={s.task.id} task={s.task} />
-              ))}
+              <AnimatePresence initial={false}>
+                {rest.map((s) => (
+                  <TaskRow key={s.task.id} task={s.task} />
+                ))}
+              </AnimatePresence>
             </div>
           </Card>
         </div>
@@ -149,9 +160,11 @@ export function Today() {
           <SectionHeading title={`Done today (${completedToday.length})`} />
           <Card className="!p-2">
             <div className="divide-y divide-ink-800/60">
-              {completedToday.map((t) => (
-                <TaskRow key={t.id} task={t} />
-              ))}
+              <AnimatePresence initial={false}>
+                {completedToday.map((t) => (
+                  <TaskRow key={t.id} task={t} />
+                ))}
+              </AnimatePresence>
             </div>
           </Card>
         </div>
@@ -197,7 +210,7 @@ export function Today() {
       </div>
 
       <TaskForm open={showAdd} onClose={() => setShowAdd(false)} />
-      {showReview && <WeeklyReview onClose={() => setShowReview(false)} />}
+      <AnimatePresence>{showReview && <WeeklyReview onClose={() => setShowReview(false)} />}</AnimatePresence>
     </div>
   )
 }
