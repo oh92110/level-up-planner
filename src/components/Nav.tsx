@@ -2,8 +2,8 @@ import { Link, useLocation } from 'react-router-dom'
 import { motion } from 'framer-motion'
 
 const ITEMS = [
-  { to: '/', label: 'Today', icon: '🏠' },
-  { to: '/week', label: 'Week', icon: '📅' },
+  { to: '/', label: 'Week', icon: '📅' },
+  { to: '/tasks', label: 'Tasks', icon: '✅' },
   { to: '/projects', label: 'Projects', icon: '🚀' },
   { to: '/goals', label: 'Goals', icon: '🎯' },
   { to: '/progress', label: 'Progress', icon: '📊' },
@@ -23,7 +23,7 @@ export function Nav() {
       <nav className="hidden sm:flex flex-col w-56 shrink-0 border-r border-ink-800 px-3 py-5 gap-1">
         <div className="px-3 mb-6">
           <p className="text-lg font-bold tracking-tight text-slate-100">
-            Level <span className="text-accent">Up</span>
+            Level <span className="text-cyan">Up</span>
           </p>
         </div>
         {ITEMS.map((item) => {
@@ -59,7 +59,7 @@ export function Nav() {
                 key={item.to}
                 to={item.to}
                 className={`relative flex flex-col items-center gap-0.5 py-2.5 px-2 flex-1 text-[10px] font-medium transition-colors ${
-                  active ? 'text-accent' : 'text-slate-500'
+                  active ? 'text-cyan-soft' : 'text-slate-500'
                 }`}
               >
                 <motion.span
@@ -73,7 +73,7 @@ export function Nav() {
                 {active && (
                   <motion.div
                     layoutId="mobile-nav-dot"
-                    className="absolute bottom-1 h-1 w-1 rounded-full bg-accent"
+                    className="absolute bottom-1 h-1 w-1 rounded-full bg-cyan"
                     transition={{ type: 'spring', stiffness: 420, damping: 32 }}
                   />
                 )}

@@ -113,7 +113,7 @@ export function WeeklyReview({ onClose }: { onClose: () => void }) {
           </Card>
           {missed.length > 0 && (
             <p className="text-xs text-slate-500 mt-2">
-              These will prompt you individually from the Today screen — reschedule, shrink, deprioritise or drop
+              These will prompt you individually from the Tasks screen — reschedule, shrink, deprioritise or drop
               each one.
             </p>
           )}
@@ -153,7 +153,7 @@ export function WeeklyReview({ onClose }: { onClose: () => void }) {
               value={focus}
               onChange={(e) => setFocus(e.target.value)}
               rows={4}
-              placeholder="Keep it short — this is what Today will lean on."
+              placeholder="Keep it short — this is what next week will lean on."
               className="w-full resize-none"
             />
           </Field>
@@ -181,7 +181,7 @@ export function WeeklyReview({ onClose }: { onClose: () => void }) {
             >
               <p className="text-sm text-lo mb-3">✓ Review saved.</p>
               <button onClick={onClose} className="btn-primary w-full">
-                Back to Today
+                Back to Week
               </button>
             </motion.div>
           ) : (

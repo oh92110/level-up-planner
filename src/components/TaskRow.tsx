@@ -17,10 +17,15 @@ export function TaskRow({
   task,
   showProject = true,
   emphasis = false,
+  timeLabel,
+  timeTone = 'planned',
 }: {
   task: Task
   showProject?: boolean
   emphasis?: boolean
+  /** Optional time badge shown before the duration — e.g. a suggested or actual slot. */
+  timeLabel?: string
+  timeTone?: 'planned' | 'done' | 'overflow'
 }) {
   const { toggleTask, projects } = useStore()
   const [editing, setEditing] = useState(false)
@@ -88,6 +93,15 @@ export function TaskRow({
             </span>
           </div>
           <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 mt-1 text-xs text-slate-500">
+            {timeLabel && (
+              <span
+                className={`mono-num font-medium ${
+                  timeTone === 'done' ? 'text-slate-500' : timeTone === 'overflow' ? 'text-med' : 'text-cyan-soft'
+                }`}
+              >
+                {timeLabel}
+              </span>
+            )}
             <span>{formatDuration(task.duration_min)}</span>
             {due && !task.completed && <span className={DUE_TONE[due.tone]}>{due.text}</span>}
             {showProject && project && <span className="truncate max-w-[14rem]">{project.name}</span>}

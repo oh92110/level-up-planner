@@ -66,6 +66,14 @@ export function minutesOfDay(t: string): number {
   return h * 60 + m
 }
 
+export function formatMinutesOfDay(min: number): string {
+  const h = Math.floor(min / 60) % 24
+  const m = min % 60
+  const suffix = h < 12 ? 'AM' : 'PM'
+  const hr = h % 12 === 0 ? 12 : h % 12
+  return m === 0 ? `${hr} ${suffix}` : `${hr}:${String(m).padStart(2, '0')} ${suffix}`
+}
+
 export function nowMinutes(): number {
   const d = new Date()
   return d.getHours() * 60 + d.getMinutes()

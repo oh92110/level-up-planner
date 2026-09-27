@@ -307,6 +307,81 @@ export function nextActionFor(project: Project, tasks: Task[], milestones: Miles
   )[0]
 }
 
+// ---------------------------------------------------------------------------
+// Day timeline — packs a day's commitments + tasks into a time-sorted view
+// ---------------------------------------------------------------------------
+
+export type TimelineBlockKind = 'commitment' | 'task-done' | 'task-planned' | 'task-overflow'
+
+export interface TimelineBlock {
+  kind: TimelineBlockKind
+  start: number
+  end: number
+  label: string
+  commitment?: Commitment
+  task?: Task
+}
+
+/**
+ * Fixed commitments get their real times. Completed tasks use their actual
+ * completed_at time. Open tasks are packed into the day's free windows in
+ * priority order to give a suggested plan — not a commitment, just a guess.
+ */
+export function dayTimeline(
+  date: string,
+  commitments: Commitment[],
+  tasks: Task[],
+  projects: Project[],
+  preferences: Preferences | null,
+): TimelineBlock[] {
+  const wd = weekdayOf(date)
+  const dayCommitments = commitments.filter((c) => c.weekday === wd && c.active)
+  const timed = dayCommitments.filter((c) => c.start_time && c.end_time)
+
+  const blocks: TimelineBlock[] = timed.map((c) => ({
+    kind: 'commitment',
+    start: minutesOfDay(c.start_time!),
+    end: minutesOfDay(c.end_time!),
+    label: c.label,
+    commitment: c,
+  }))
+
+  const dayTasks = tasks.filter((t) => t.scheduled_date === date)
+
+  for (const t of dayTasks.filter((t) => t.completed && t.completed_at)) {
+    const d = new Date(t.completed_at!)
+    const start = d.getHours() * 60 + d.getMinutes()
+    blocks.push({ kind: 'task-done', start, end: start + Math.max(t.duration_min, 10), label: t.name, task: t })
+  }
+
+  const open = dayTasks.filter((t) => !t.completed)
+  const ranked = rankTasks(open, { ref: date, projects, preferences })
+  const windows = freeWindows(dayCommitments, preferences).map((w) => ({ ...w }))
+  const overflow: Task[] = []
+
+  for (const { task } of ranked) {
+    const wi = windows.findIndex((w) => w.end - w.start >= task.duration_min)
+    if (wi === -1) {
+      overflow.push(task)
+      continue
+    }
+    const w = windows[wi]
+    blocks.push({ kind: 'task-planned', start: w.start, end: w.start + task.duration_min, label: task.name, task })
+    w.start += task.duration_min
+    if (w.end - w.start < 5) windows.splice(wi, 1)
+  }
+
+  blocks.sort((a, b) => a.start - b.start)
+
+  let cursor = blocks.length ? blocks[blocks.length - 1].end : DAY_START
+  for (const task of overflow) {
+    blocks.push({ kind: 'task-overflow', start: cursor, end: cursor + task.duration_min, label: task.name, task })
+    cursor += task.duration_min
+  }
+
+  return blocks
+}
+
 /** Tasks that slipped: scheduled before today, or past due, still open. */
 export function missedTasks(tasks: Task[], ref = today()): Task[] {
   return tasks.filter(
