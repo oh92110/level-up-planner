@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useStore } from '../store'
-import { Card, ProgressBar, SectionHeading } from '../components/ui'
+import { Card, ProgressBar } from '../components/ui'
 import { TaskRow } from '../components/TaskRow'
 import { TaskForm } from '../components/TaskForm'
 import { WeeklyReview } from './WeeklyReview'
@@ -40,6 +40,7 @@ export function Week() {
   const dates = weekDates(start)
   const reviewDoneThisWeek = reviews.some((r) => r.week_start === weekStart(ref))
 
+  const [showUnscheduled, setShowUnscheduled] = useState(false)
   const unscheduled = useMemo(() => tasks.filter((t) => !t.completed && !t.scheduled_date), [tasks])
 
   return (
@@ -109,16 +110,26 @@ export function Week() {
 
       {unscheduled.length > 0 && (
         <div className="mt-6">
-          <SectionHeading title={`Not yet scheduled (${unscheduled.length})`} />
-          <Card className="!p-2">
-            <div className="divide-y divide-ink-800/60">
-              <AnimatePresence initial={false}>
-                {unscheduled.map((t) => (
-                  <TaskRow key={t.id} task={t} />
-                ))}
-              </AnimatePresence>
-            </div>
-          </Card>
+          <button
+            onClick={() => setShowUnscheduled((s) => !s)}
+            className="btn-quiet text-xs px-2 py-1 font-mono"
+          >
+            {showUnscheduled ? '▾' : '▸'} not yet scheduled ({unscheduled.length})
+          </button>
+          <div
+            className="overflow-hidden transition-[max-height,opacity] duration-300 ease-in-out"
+            style={{ maxHeight: showUnscheduled ? 4000 : 0, opacity: showUnscheduled ? 1 : 0 }}
+          >
+            <Card className="!p-2 mt-2">
+              <div className="divide-y divide-ink-800/60">
+                <AnimatePresence initial={false}>
+                  {unscheduled.map((t) => (
+                    <TaskRow key={t.id} task={t} />
+                  ))}
+                </AnimatePresence>
+              </div>
+            </Card>
+          </div>
         </div>
       )}
 
