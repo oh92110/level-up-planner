@@ -308,10 +308,8 @@ export function nextActionFor(project: Project, tasks: Task[], milestones: Miles
 }
 
 // ---------------------------------------------------------------------------
-// Day timeline — packs a day's commitments + tasks into a time-sorted view
+// Day schedule — the day as a short list of real blocks, not an hour grid
 // ---------------------------------------------------------------------------
-
-export type TimelineBlockKind = 'commitment' | 'task-done' | 'task-pinned' | 'task-planned' | 'task-overflow'
 
 function subtractRange(windows: FreeWindow[], range: FreeWindow): FreeWindow[] {
   const result: FreeWindow[] = []
@@ -326,87 +324,128 @@ function subtractRange(windows: FreeWindow[], range: FreeWindow): FreeWindow[] {
   return result.filter((w) => w.end > w.start)
 }
 
-export interface TimelineBlock {
-  kind: TimelineBlockKind
+export interface PlacedTask {
+  task: Task
+  start: number
+  /** true when the user dragged it to this exact time; false when we suggested it. */
+  pinned: boolean
+}
+
+export interface DaySegment {
+  kind: 'commitment' | 'free'
   start: number
   end: number
-  label: string
   commitment?: Commitment
-  task?: Task
+  tasks: PlacedTask[]
+}
+
+export interface DaySchedule {
+  /** Commitments with no set time — "10K run", "Rest day". Shown as chips, not blocks. */
+  anytime: Commitment[]
+  segments: DaySegment[]
+  /** Open tasks with nowhere left to go today. */
+  overflow: Task[]
+  done: Task[]
 }
 
 /**
- * Fixed commitments get their real times. Completed tasks use their actual
- * completed_at time. Tasks the user dragged onto a slot (scheduled_time set)
- * get pinned there. Everything else open is packed into whatever's left of
- * the day's free windows, in priority order — a suggestion, not a commitment.
+ * Builds the day as an ordered list of only the blocks that actually exist:
+ * fixed commitments at their real times, and the free windows between them.
+ * Pinned tasks (dragged to a time) hold their slot; the rest are packed into
+ * what's left in priority order as a suggestion.
  */
-export function dayTimeline(
+export function daySchedule(
   date: string,
   commitments: Commitment[],
   tasks: Task[],
   projects: Project[],
   preferences: Preferences | null,
-): TimelineBlock[] {
+): DaySchedule {
   const wd = weekdayOf(date)
   const dayCommitments = commitments.filter((c) => c.weekday === wd && c.active)
+  const anytime = dayCommitments.filter((c) => !c.start_time || !c.end_time)
   const timed = dayCommitments.filter((c) => c.start_time && c.end_time)
 
-  const blocks: TimelineBlock[] = timed.map((c) => ({
-    kind: 'commitment',
-    start: minutesOfDay(c.start_time!),
-    end: minutesOfDay(c.end_time!),
-    label: c.label,
-    commitment: c,
-  }))
-
   const dayTasks = tasks.filter((t) => t.scheduled_date === date)
-
-  for (const t of dayTasks.filter((t) => t.completed && t.completed_at)) {
-    const d = new Date(t.completed_at!)
-    const start = d.getHours() * 60 + d.getMinutes()
-    blocks.push({ kind: 'task-done', start, end: start + Math.max(t.duration_min, 10), label: t.name, task: t })
-  }
-
+  const done = dayTasks.filter((t) => t.completed)
   const open = dayTasks.filter((t) => !t.completed)
-  const pinned = open.filter((t) => t.scheduled_time)
-  const unpinned = open.filter((t) => !t.scheduled_time)
 
-  for (const t of pinned) {
-    const start = minutesOfDay(t.scheduled_time!)
-    blocks.push({ kind: 'task-pinned', start, end: start + t.duration_min, label: t.name, task: t })
-  }
+  const segments: DaySegment[] = [
+    ...timed.map((c) => ({
+      kind: 'commitment' as const,
+      start: minutesOfDay(c.start_time!),
+      end: minutesOfDay(c.end_time!),
+      commitment: c,
+      tasks: [] as PlacedTask[],
+    })),
+    ...freeWindows(dayCommitments, preferences).map((w) => ({
+      kind: 'free' as const,
+      start: w.start,
+      end: w.end,
+      tasks: [] as PlacedTask[],
+    })),
+  ].sort((a, b) => a.start - b.start || (a.kind === 'commitment' ? -1 : 1))
 
-  let windows = freeWindows(dayCommitments, preferences).map((w) => ({ ...w }))
-  for (const t of pinned) {
-    const start = minutesOfDay(t.scheduled_time!)
-    windows = subtractRange(windows, { start, end: start + t.duration_min })
-  }
-
-  const ranked = rankTasks(unpinned, { ref: date, projects, preferences })
   const overflow: Task[] = []
 
-  for (const { task } of ranked) {
-    const wi = windows.findIndex((w) => w.end - w.start >= task.duration_min)
-    if (wi === -1) {
+  for (const t of open.filter((t) => t.scheduled_time)) {
+    const start = minutesOfDay(t.scheduled_time!)
+    const seg = segments.find((s) => start >= s.start && start < s.end)
+    if (seg) seg.tasks.push({ task: t, start, pinned: true })
+    else overflow.push(t)
+  }
+
+  // Remaining capacity per free segment, after pinned tasks have taken their slots.
+  const caps = segments
+    .filter((s) => s.kind === 'free')
+    .map((seg) => {
+      let free: FreeWindow[] = [{ start: seg.start, end: seg.end }]
+      for (const p of seg.tasks) free = subtractRange(free, { start: p.start, end: p.start + p.task.duration_min })
+      return { seg, free }
+    })
+
+  for (const { task } of rankTasks(open.filter((t) => !t.scheduled_time), { ref: date, projects, preferences })) {
+    const cap = caps.find((c) => c.free.some((f) => f.end - f.start >= task.duration_min))
+    if (!cap) {
       overflow.push(task)
       continue
     }
-    const w = windows[wi]
-    blocks.push({ kind: 'task-planned', start: w.start, end: w.start + task.duration_min, label: task.name, task })
-    w.start += task.duration_min
-    if (w.end - w.start < 5) windows.splice(wi, 1)
+    const slot = cap.free.find((f) => f.end - f.start >= task.duration_min)!
+    cap.seg.tasks.push({ task, start: slot.start, pinned: false })
+    cap.free = subtractRange(cap.free, { start: slot.start, end: slot.start + task.duration_min })
   }
 
-  blocks.sort((a, b) => a.start - b.start)
+  for (const s of segments) s.tasks.sort((a, b) => a.start - b.start)
+  return { anytime, segments, overflow, done }
+}
 
-  let cursor = blocks.length ? blocks[blocks.length - 1].end : DAY_START
-  for (const task of overflow) {
-    blocks.push({ kind: 'task-overflow', start: cursor, end: cursor + task.duration_min, label: task.name, task })
-    cursor += task.duration_min
+/**
+ * Where a task should land when dropped on a free window: the first gap inside
+ * it that fits, so dropping two tasks on the same window stacks them instead of
+ * overlapping. Returns minutes-of-day.
+ */
+export function slotForDrop(args: {
+  date: string
+  windowStart: number
+  task: Task
+  tasks: Task[]
+  commitments: Commitment[]
+  preferences: Preferences | null
+}): number {
+  const { date, windowStart, task, tasks, commitments, preferences } = args
+  const wd = weekdayOf(date)
+  const dayCommitments = commitments.filter((c) => c.weekday === wd && c.active)
+  const window = freeWindows(dayCommitments, preferences).find((w) => w.start === windowStart)
+  if (!window) return windowStart
+
+  let free: FreeWindow[] = [{ ...window }]
+  for (const t of tasks) {
+    if (t.id === task.id || t.completed || t.scheduled_date !== date || !t.scheduled_time) continue
+    const s = minutesOfDay(t.scheduled_time)
+    free = subtractRange(free, { start: s, end: s + t.duration_min })
   }
 
-  return blocks
+  return (free.find((f) => f.end - f.start >= task.duration_min) ?? free[0] ?? window).start
 }
 
 /** Tasks that slipped: scheduled before today, or past due, still open. */

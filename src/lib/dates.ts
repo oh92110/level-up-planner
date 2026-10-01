@@ -66,6 +66,13 @@ export function minutesOfDay(t: string): number {
   return h * 60 + m
 }
 
+/** Minutes-of-day back to the "HH:MM" shape the database stores. */
+export function toHHMM(min: number): string {
+  const h = Math.floor(min / 60) % 24
+  const m = Math.round(min) % 60
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}
+
 export function formatMinutesOfDay(min: number): string {
   const h = Math.floor(min / 60) % 24
   const m = min % 60

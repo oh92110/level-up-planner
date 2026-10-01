@@ -66,6 +66,17 @@
   }
 }
 
+/* Diagonal hatching for time that's already committed and can't take tasks */
+.stripe-block {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(148, 163, 184, 0.05) 0,
+    rgba(148, 163, 184, 0.05) 1px,
+    transparent 1px,
+    transparent 7px
+  );
+}
+
 /* HUD-style corner brackets for the "active" day / focal elements */
 .hud-corners {
   position: relative;
