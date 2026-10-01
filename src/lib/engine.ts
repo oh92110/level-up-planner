@@ -311,7 +311,20 @@ export function nextActionFor(project: Project, tasks: Task[], milestones: Miles
 // Day timeline — packs a day's commitments + tasks into a time-sorted view
 // ---------------------------------------------------------------------------
 
-export type TimelineBlockKind = 'commitment' | 'task-done' | 'task-planned' | 'task-overflow'
+export type TimelineBlockKind = 'commitment' | 'task-done' | 'task-pinned' | 'task-planned' | 'task-overflow'
+
+function subtractRange(windows: FreeWindow[], range: FreeWindow): FreeWindow[] {
+  const result: FreeWindow[] = []
+  for (const w of windows) {
+    if (range.end <= w.start || range.start >= w.end) {
+      result.push(w)
+      continue
+    }
+    if (range.start > w.start) result.push({ start: w.start, end: Math.min(range.start, w.end) })
+    if (range.end < w.end) result.push({ start: Math.max(range.end, w.start), end: w.end })
+  }
+  return result.filter((w) => w.end > w.start)
+}
 
 export interface TimelineBlock {
   kind: TimelineBlockKind
@@ -324,8 +337,9 @@ export interface TimelineBlock {
 
 /**
  * Fixed commitments get their real times. Completed tasks use their actual
- * completed_at time. Open tasks are packed into the day's free windows in
- * priority order to give a suggested plan — not a commitment, just a guess.
+ * completed_at time. Tasks the user dragged onto a slot (scheduled_time set)
+ * get pinned there. Everything else open is packed into whatever's left of
+ * the day's free windows, in priority order — a suggestion, not a commitment.
  */
 export function dayTimeline(
   date: string,
@@ -355,8 +369,21 @@ export function dayTimeline(
   }
 
   const open = dayTasks.filter((t) => !t.completed)
-  const ranked = rankTasks(open, { ref: date, projects, preferences })
-  const windows = freeWindows(dayCommitments, preferences).map((w) => ({ ...w }))
+  const pinned = open.filter((t) => t.scheduled_time)
+  const unpinned = open.filter((t) => !t.scheduled_time)
+
+  for (const t of pinned) {
+    const start = minutesOfDay(t.scheduled_time!)
+    blocks.push({ kind: 'task-pinned', start, end: start + t.duration_min, label: t.name, task: t })
+  }
+
+  let windows = freeWindows(dayCommitments, preferences).map((w) => ({ ...w }))
+  for (const t of pinned) {
+    const start = minutesOfDay(t.scheduled_time!)
+    windows = subtractRange(windows, { start, end: start + t.duration_min })
+  }
+
+  const ranked = rankTasks(unpinned, { ref: date, projects, preferences })
   const overflow: Task[] = []
 
   for (const { task } of ranked) {

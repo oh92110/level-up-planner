@@ -56,6 +56,8 @@ export interface Task {
   priority: Priority
   due_date: string | null
   scheduled_date: string | null
+  /** "HH:MM" — set once a task is dragged onto a specific slot; null means "sometime that day". */
+  scheduled_time: string | null
   duration_min: number
   project_id: string | null
   milestone_id: string | null

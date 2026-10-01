@@ -3,7 +3,6 @@ import { motion } from 'framer-motion'
 
 const ITEMS = [
   { to: '/', label: 'Week', icon: '📅' },
-  { to: '/tasks', label: 'Tasks', icon: '✅' },
   { to: '/projects', label: 'Projects', icon: '🚀' },
   { to: '/goals', label: 'Goals', icon: '🎯' },
   { to: '/progress', label: 'Progress', icon: '📊' },

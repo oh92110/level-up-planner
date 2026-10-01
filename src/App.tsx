@@ -4,7 +4,6 @@ import { useStore } from './store'
 import { Nav } from './components/Nav'
 import { Login } from './pages/Login'
 import { Week } from './pages/Week'
-import { Tasks } from './pages/Tasks'
 import { Projects } from './pages/Projects'
 import { Goals } from './pages/Goals'
 import { Progress } from './pages/Progress'
@@ -41,8 +40,8 @@ export default function App() {
       <main className="flex-1 min-w-0 pb-20 sm:pb-8 overflow-x-hidden">
         <Routes>
           <Route path="/" element={<Week />} />
-          <Route path="/tasks" element={<Tasks />} />
           <Route path="/week" element={<Navigate to="/" replace />} />
+          <Route path="/tasks" element={<Navigate to="/" replace />} />
           <Route path="/projects" element={<Projects />} />
           <Route path="/goals" element={<Goals />} />
           <Route path="/progress" element={<Progress />} />
