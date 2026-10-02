@@ -24,6 +24,8 @@ export function DraggableTask({
   tone = 'normal',
   /** Fills its container and drops the second line — for short calendar blocks. */
   compact = false,
+  /** Calendar-grid block: no grip, drags on touch too, delete floats on hover. */
+  dense = false,
 }: {
   task: Task
   at?: number
@@ -32,6 +34,7 @@ export function DraggableTask({
   draggable?: boolean
   tone?: 'normal' | 'overflow'
   compact?: boolean
+  dense?: boolean
 }) {
   const { toggleTask, deleteTask, projects } = useStore()
   const toast = useToast()
@@ -66,11 +69,13 @@ export function DraggableTask({
     }
   }
 
-  // Mouse: press anywhere on the row. Under the threshold it stays a click.
-  // Touch is excluded here so a finger on the row still scrolls the page —
-  // on touch you drag by the grip, which opts out of scrolling.
+  // Press anywhere to drag; under the threshold it stays a click.
+  // In list mode touch is excluded so a finger on the row still scrolls the
+  // page — there you drag by the grip. Grid blocks set touch-action: none and
+  // accept touch directly, since the calendar has empty space to scroll from.
   function onPointerDown(e: PointerEvent) {
-    if (!draggable || e.button !== 0 || e.pointerType === 'touch') return
+    if (!draggable || e.button !== 0) return
+    if (!dense && e.pointerType === 'touch') return
     begin(task, e)
   }
 
@@ -92,13 +97,15 @@ export function DraggableTask({
     <>
       <div
         onPointerDown={onPointerDown}
-        className={`group relative flex items-stretch gap-2 overflow-hidden rounded-md bg-ink-850
-          pr-1 select-none transition-colors hover:bg-ink-800
+        className={`group relative flex items-stretch overflow-hidden select-none transition-colors
           before:absolute before:inset-y-0 before:left-0 before:w-[3px] before:content-[''] ${edge}
-          ${compact ? 'h-full' : ''}
+          ${dense
+            ? 'h-full gap-1.5 rounded-[5px] bg-ink-800/90 pl-1.5 pr-1 hover:bg-ink-700 touch-none'
+            : `gap-2 rounded-md bg-ink-850 pr-1 hover:bg-ink-800 ${compact ? 'h-full' : ''}`}
           ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}
           ${isDragging ? 'opacity-25' : ''}`}
       >
+        {!dense && (
         <button
           onPointerDown={onGripDown}
           disabled={!draggable}
@@ -119,6 +126,7 @@ export function DraggableTask({
             <circle cx="5" cy="12" r="1" />
           </svg>
         </button>
+        )}
 
         <button
           onClick={onToggle}
@@ -171,8 +179,10 @@ export function DraggableTask({
           onClick={onDelete}
           disabled={busy}
           aria-label={`Delete ${task.name}`}
-          className="self-center shrink-0 h-6 w-6 flex items-center justify-center rounded text-slate-600
-            opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-hi transition-opacity"
+          className={`shrink-0 flex items-center justify-center rounded text-slate-500
+            opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-hi transition-opacity ${
+              dense ? 'absolute right-0 top-0 h-full w-5 bg-gradient-to-l from-ink-700 to-transparent' : 'self-center h-6 w-6'
+            }`}
         >
           <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.7">
             <path d="M4 4l8 8M12 4l-8 8" strokeLinecap="round" />
