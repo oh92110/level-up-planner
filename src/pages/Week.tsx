@@ -7,7 +7,7 @@ import { TaskForm } from '../components/TaskForm'
 import { MissedTaskPrompt } from '../components/MissedTaskPrompt'
 import { WeeklyReview } from './WeeklyReview'
 import { useToast } from '../components/Toast'
-import { daySchedule, rankTasks, slotForDrop } from '../lib/engine'
+import { daySchedule, rankTasks } from '../lib/engine'
 import type { DaySchedule, PlacedTask } from '../lib/engine'
 import {
   addDays,
@@ -31,7 +31,7 @@ const DAY_START = 6 * 60
 const DAY_END = 23 * 60
 const HOUR_H = 40
 const PPM = HOUR_H / 60
-const SNAP = 15
+
 const HOURS = Array.from({ length: (DAY_END - DAY_START) / 60 + 1 }, (_, i) => DAY_START + i * 60)
 
 /** Commitments at least this long fold into a compact band instead of eating the day. */
@@ -161,24 +161,38 @@ export function Week() {
       }
       if (kind !== 'track') return
 
-      // The track's scale is piecewise (work folds up), so convert the drop
-      // position back through the same layout the track was drawn with.
+      // The track's scale is piecewise (long commitments fold up), so convert
+      // the drop position back through the same layout the track was drawn with.
       const schedule = daySchedule(date, commitments, tasks, projects, preferences)
       const { spans, total } = buildLayout(schedule, allPlaced(schedule))
       const raw = yToMinute(spans, ratio * total)
-      const latest = DAY_END - task.duration_min
-      let minute = Math.min(latest, Math.max(DAY_START, Math.round(raw / SNAP) * SNAP))
 
-      const clash = tasks.some(
-        (t) =>
-          t.id !== task.id &&
-          !t.completed &&
-          t.scheduled_date === date &&
-          t.scheduled_time != null &&
-          minutesOfDay(t.scheduled_time) < minute + task.duration_min &&
-          minutesOfDay(t.scheduled_time) + t.duration_min > minute,
-      )
-      if (clash) minute = slotForDrop({ date, windowStart: minute, task, tasks, commitments, preferences })
+      // Always land on a whole hour.
+      const dur = task.duration_min
+      const lastHour = Math.floor((DAY_END - dur) / 60) * 60
+      const snap = (m: number) => Math.max(DAY_START, Math.min(lastHour, Math.round(m / 60) * 60))
+
+      const taken = tasks
+        .filter((t) => t.id !== task.id && !t.completed && t.scheduled_date === date && t.scheduled_time != null)
+        .map((t) => ({ start: minutesOfDay(t.scheduled_time!), end: minutesOfDay(t.scheduled_time!) + t.duration_min }))
+      const isFree = (m: number) => !taken.some((o) => o.start < m + dur && o.end > m)
+
+      let minute = snap(raw)
+      if (!isFree(minute)) {
+        // Walk outwards an hour at a time rather than silently overlapping.
+        for (let step = 60; step <= DAY_END - DAY_START; step += 60) {
+          const up = minute + step
+          const down = minute - step
+          if (up <= lastHour && isFree(up)) {
+            minute = up
+            break
+          }
+          if (down >= DAY_START && isFree(down)) {
+            minute = down
+            break
+          }
+        }
+      }
 
       const time = toHHMM(minute)
       if (task.scheduled_date === date && task.scheduled_time === time) return
@@ -290,14 +304,6 @@ function DayCard({
   const dayTasks = useMemo(() => tasks.filter((t) => t.scheduled_date === date), [tasks, date])
   const open = dayTasks.filter((t) => !t.completed).length
   const done = dayTasks.length - open
-  const freeMin = schedule.segments
-    .filter((s) => s.kind === 'free')
-    .reduce((sum, s) => sum + (s.end - s.start), 0)
-
-  const summary = [
-    ...schedule.segments.filter((s) => s.kind === 'commitment').map((s) => s.commitment!.label),
-    ...schedule.anytime.map((c) => c.label),
-  ]
 
   return (
     <div
@@ -320,14 +326,11 @@ function DayCard({
             </span>
           </div>
 
-          <p className="min-w-0 flex-1 truncate text-sm text-slate-500">
-            {summary.length ? summary.join('   ·   ') : 'Nothing scheduled'}
-          </p>
+          <span className="flex-1" />
 
           <div className="flex shrink-0 items-center gap-4">
             {open > 0 && <span className="mono-num text-xs text-slate-300">{open} open</span>}
             {done > 0 && <span className="mono-num text-xs text-lo/70">{done} done</span>}
-            {freeMin > 0 && <span className="mono-num text-xs text-slate-600">{formatDuration(freeMin)} free</span>}
             <motion.span
               animate={{ rotate: expanded ? 180 : 0 }}
               transition={{ duration: 0.18 }}
@@ -348,6 +351,16 @@ function DayCard({
             transition={{ duration: 0.22 }}
             style={{ overflow: 'hidden' }}
           >
+            {schedule.anytime.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 px-5 pt-3">
+                {schedule.anytime.map((c) => (
+                  <span key={c.id} className="rounded-md bg-ink-850 px-2.5 py-1 text-[12px] text-slate-400">
+                    {c.label}
+                  </span>
+                ))}
+              </div>
+            )}
+
             <DayTrack date={date} isToday={isToday} schedule={schedule} />
 
             {schedule.overflow.length > 0 && (
