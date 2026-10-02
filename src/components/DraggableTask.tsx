@@ -42,6 +42,8 @@ export function DraggableTask({
   const [editing, setEditing] = useState(false)
   const [busy, setBusy] = useState(false)
 
+  // Grid/band blocks are always single-line.
+  const tight = compact || dense
   const project = projects.find((p) => p.id === task.project_id)
   const due = relativeDue(task.due_date)
   const meta = PRIORITY_META[task.priority]
@@ -101,7 +103,7 @@ export function DraggableTask({
           before:absolute before:inset-y-0 before:left-0 before:w-[3px] before:content-[''] ${edge}
           ${dense
             ? 'h-full gap-1.5 rounded-[5px] bg-ink-800/90 pl-1.5 pr-1 hover:bg-ink-700 touch-none'
-            : `gap-2 rounded-md bg-ink-850 pr-1 hover:bg-ink-800 ${compact ? 'h-full' : ''}`}
+            : `gap-2 rounded-md bg-ink-850 pr-1 hover:bg-ink-800 ${tight ? 'h-full' : ''}`}
           ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}
           ${isDragging ? 'opacity-25' : ''}`}
       >
@@ -145,7 +147,7 @@ export function DraggableTask({
           onClick={() => {
             if (!didJustDrag()) setEditing(true)
           }}
-          className={`flex-1 min-w-0 self-center text-left ${compact ? 'py-1' : 'py-2'}`}
+          className={`flex-1 min-w-0 self-center text-left ${tight ? 'py-1' : 'py-2'}`}
         >
           <div className="flex items-center gap-1.5 min-w-0">
             {!task.completed && <span className="text-[9px] leading-none shrink-0">{meta.dot}</span>}
@@ -156,14 +158,14 @@ export function DraggableTask({
             >
               {task.name}
             </span>
-            {compact && at != null && !task.completed && (
+            {tight && at != null && !task.completed && (
               <span className={`mono-num ml-auto pl-2 text-[10px] shrink-0 ${pinned ? 'text-cyan' : 'text-slate-500'}`}>
                 {formatMinutesOfDay(at)}
               </span>
             )}
           </div>
 
-          {!compact && !task.completed && (
+          {!tight && !task.completed && (
             <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-500">
               {at != null && (
                 <span className={`mono-num ${pinned ? 'text-cyan' : 'text-slate-500'}`}>{formatMinutesOfDay(at)}</span>

@@ -24,18 +24,102 @@ import {
   weekdayOf,
 } from '../lib/dates'
 import { WEEKDAYS_SHORT } from '../lib/types'
-import type { Preferences, Task } from '../lib/types'
+import type { Commitment, Preferences, Task } from '../lib/types'
 
 /** Every hour, 6 AM through 11 PM. */
 const DAY_START = 6 * 60
 const DAY_END = 23 * 60
-const HOUR_H = 56
+const HOUR_H = 40
 const PPM = HOUR_H / 60
-const TRACK_H = ((DAY_END - DAY_START) / 60) * HOUR_H
 const SNAP = 15
 const HOURS = Array.from({ length: (DAY_END - DAY_START) / 60 + 1 }, (_, i) => DAY_START + i * 60)
 
-const y = (minute: number) => (Math.max(DAY_START, Math.min(DAY_END, minute)) - DAY_START) * PPM
+/** Commitments at least this long fold into a compact band instead of eating the day. */
+const COLLAPSE_MIN = 3 * 60
+const COLLAPSED_H = 44
+
+const BAND_ROW = 28
+
+interface Span {
+  start: number
+  end: number
+  kind: 'commitment' | 'free'
+  commitment?: Commitment
+  collapsed: boolean
+  /** Tasks falling inside a folded band — listed in it rather than positioned. */
+  inner: PlacedTask[]
+  top: number
+  height: number
+}
+
+/**
+ * The day as stacked spans. Long commitments collapse to a fixed band, so the
+ * minute-to-pixel scale is piecewise — everything positional goes through
+ * minuteToY / yToMinute rather than multiplying by PPM.
+ *
+ * Tasks that fall inside a folded band are listed inside it, so folding never
+ * hides anything.
+ */
+function buildLayout(schedule: DaySchedule, placed: PlacedTask[]): { spans: Span[]; total: number } {
+  const timed = schedule.segments
+    .filter((s) => s.kind === 'commitment')
+    .map((s) => ({
+      start: Math.max(DAY_START, s.start),
+      end: Math.min(DAY_END, s.end),
+      commitment: s.commitment!,
+    }))
+    .filter((s) => s.end > s.start)
+    .sort((a, b) => a.start - b.start)
+
+  const raw: Omit<Span, 'top' | 'height'>[] = []
+  let cursor = DAY_START
+  for (const c of timed) {
+    if (c.start > cursor) raw.push({ start: cursor, end: c.start, kind: 'free', collapsed: false, inner: [] })
+    if (c.end <= cursor) continue
+    const start = Math.max(c.start, cursor)
+    const collapsed = c.end - start >= COLLAPSE_MIN
+    raw.push({
+      start,
+      end: c.end,
+      kind: 'commitment',
+      commitment: c.commitment,
+      collapsed,
+      inner: collapsed ? placed.filter((p) => p.start >= start && p.start < c.end) : [],
+    })
+    cursor = c.end
+  }
+  if (cursor < DAY_END) raw.push({ start: cursor, end: DAY_END, kind: 'free', collapsed: false, inner: [] })
+
+  const spans: Span[] = []
+  let top = 0
+  for (const r of raw) {
+    const height = r.collapsed ? COLLAPSED_H + r.inner.length * BAND_ROW : (r.end - r.start) * PPM
+    spans.push({ ...r, top, height })
+    top += height
+  }
+  return { spans, total: top }
+}
+
+function minuteToY(spans: Span[], minute: number): number {
+  const m = Math.max(DAY_START, Math.min(DAY_END, minute))
+  for (const s of spans) {
+    if (m >= s.start && m < s.end) return s.top + ((m - s.start) / (s.end - s.start)) * s.height
+  }
+  const last = spans[spans.length - 1]
+  return last ? last.top + last.height : 0
+}
+
+function yToMinute(spans: Span[], px: number): number {
+  for (const s of spans) {
+    if (px >= s.top && px < s.top + s.height) {
+      const f = s.height > 0 ? (px - s.top) / s.height : 0
+      return s.start + f * (s.end - s.start)
+    }
+  }
+  return px <= 0 ? DAY_START : DAY_END
+}
+
+const allPlaced = (schedule: DaySchedule): PlacedTask[] => schedule.segments.flatMap((s) => s.tasks)
 
 function weekNumber(iso: string): number {
   const d = fromISO(iso)
@@ -45,7 +129,7 @@ function weekNumber(iso: string): number {
 }
 
 export function Week() {
-  const { tasks, commitments, reviews, preferences, updateTask } = useStore()
+  const { tasks, commitments, projects, reviews, preferences, updateTask } = useStore()
   const toast = useToast()
   const [offset, setOffset] = useState(0)
   const [addFor, setAddFor] = useState<string | null>(null)
@@ -77,7 +161,11 @@ export function Week() {
       }
       if (kind !== 'track') return
 
-      const raw = DAY_START + ratio * (DAY_END - DAY_START)
+      // The track's scale is piecewise (work folds up), so convert the drop
+      // position back through the same layout the track was drawn with.
+      const schedule = daySchedule(date, commitments, tasks, projects, preferences)
+      const { spans, total } = buildLayout(schedule, allPlaced(schedule))
+      const raw = yToMinute(spans, ratio * total)
       const latest = DAY_END - task.duration_min
       let minute = Math.min(latest, Math.max(DAY_START, Math.round(raw / SNAP) * SNAP))
 
@@ -97,7 +185,7 @@ export function Week() {
       await updateTask(task.id, { scheduled_date: date, scheduled_time: time })
       toast(`${formatShort(date)} · ${formatMinutesOfDay(minute)}`, 'success')
     },
-    [updateTask, toast, tasks, commitments, preferences],
+    [updateTask, toast, tasks, commitments, projects, preferences],
   )
 
   return (
@@ -296,22 +384,30 @@ function DayCard({
   )
 }
 
-/** One continuous 6 AM – 11 PM track. Free time is just empty space, not a box. */
+/** 6 AM – 11 PM, with long commitments folded. Free time is empty space, not a box. */
 function DayTrack({ date, isToday, schedule }: { date: string; isToday: boolean; schedule: DaySchedule }) {
   const { dragging } = useDrag()
   const now = nowMinutes()
   const showNow = isToday && now >= DAY_START && now <= DAY_END
 
-  const placed: PlacedTask[] = useMemo(
-    () => schedule.segments.filter((s) => s.kind === 'free').flatMap((s) => s.tasks),
-    [schedule],
-  )
+  const placed = useMemo(() => allPlaced(schedule), [schedule])
+  const { spans, total } = useMemo(() => buildLayout(schedule, placed), [schedule, placed])
+
+  // Anything listed inside a folded band must not also be positioned on the axis.
+  const banded = new Set(spans.flatMap((s) => s.inner.map((p) => p.task.id)))
+  const onAxis = placed.filter((p) => !banded.has(p.task.id))
+
+  const Y = (m: number) => minuteToY(spans, m)
+  /** Hours hidden inside a folded band would stack on top of each other. */
+  const visibleHours = HOURS.filter((m) => {
+    const s = spans.find((sp) => m >= sp.start && m < sp.end)
+    return !s || !s.collapsed || m === s.start
+  })
 
   return (
     <div className="relative px-5 pt-1 pb-5">
-      {/* Hour axis: labels plus a short tick. No full-width rules. */}
-      {HOURS.map((m) => (
-        <div key={m} className="pointer-events-none absolute left-5 right-5" style={{ top: y(m) + 4 }}>
+      {visibleHours.map((m) => (
+        <div key={m} className="pointer-events-none absolute left-5" style={{ top: Y(m) }}>
           <span className="mono-num absolute left-0 -top-[8px] w-12 text-right text-[11px] text-slate-600">
             {formatMinutesOfDay(m)}
           </span>
@@ -322,35 +418,59 @@ function DayTrack({ date, isToday, schedule }: { date: string; isToday: boolean;
       <DropZone
         id={`track|${date}`}
         className={`drop-track relative ml-[4.75rem] rounded-lg transition-colors ${dragging ? 'bg-ink-800/25' : ''}`}
-        style={{ height: TRACK_H + 8 }}
+        style={{ height: total }}
       >
-        {schedule.segments
+        {spans
           .filter((s) => s.kind === 'commitment')
-          .map((s) => (
-            <div
-              key={s.commitment!.id}
-              className="absolute inset-x-0 overflow-hidden rounded-lg bg-ink-850/70 px-3.5 py-2.5"
-              style={{ top: y(s.start) + 4, height: Math.max(28, y(s.end) - y(s.start)) }}
-            >
-              <p className="truncate text-[13px] font-medium leading-tight text-slate-400">{s.commitment!.label}</p>
-              <p className="mono-num mt-1 text-[11px] text-slate-600">
-                {formatMinutesOfDay(s.start)} – {formatMinutesOfDay(s.end)}
-              </p>
-            </div>
-          ))}
+          .map((s) =>
+            s.collapsed ? (
+              <div
+                key={s.commitment!.id}
+                className="absolute inset-x-0 overflow-hidden rounded-lg border border-ink-800 bg-ink-850/50"
+                style={{ top: s.top, height: s.height }}
+              >
+                <div className="flex items-center gap-3 px-3.5" style={{ height: COLLAPSED_H }}>
+                  <span className="truncate text-[13px] font-medium text-slate-400">{s.commitment!.label}</span>
+                  <span className="mono-num ml-auto shrink-0 text-[11px] text-slate-600">
+                    {formatMinutesOfDay(s.start)} – {formatMinutesOfDay(s.end)} · {formatDuration(s.end - s.start)}
+                  </span>
+                </div>
+                {s.inner.length > 0 && (
+                  <div className="space-y-0.5 px-1.5 pb-1.5">
+                    {s.inner.map((p) => (
+                      <div key={p.task.id} style={{ height: BAND_ROW - 4 }}>
+                        <DraggableTask task={p.task} at={p.start} pinned={p.pinned} showProject={false} dense />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div
+                key={s.commitment!.id}
+                className="absolute inset-x-0 overflow-hidden rounded-lg bg-ink-850/70 px-3.5 py-2.5"
+                style={{ top: s.top, height: Math.max(28, s.height) }}
+              >
+                <p className="truncate text-[13px] font-medium leading-tight text-slate-400">{s.commitment!.label}</p>
+                <p className="mono-num mt-1 text-[11px] text-slate-600">
+                  {formatMinutesOfDay(s.start)} – {formatMinutesOfDay(s.end)}
+                </p>
+              </div>
+            ),
+          )}
 
-        {placed.map((p) => (
+        {onAxis.map((p) => (
           <div
             key={p.task.id}
             className="absolute inset-x-0 z-10"
-            style={{ top: y(p.start) + 4, height: Math.max(28, p.task.duration_min * PPM) }}
+            style={{ top: Y(p.start), height: Math.max(24, Y(p.start + p.task.duration_min) - Y(p.start)) }}
           >
             <DraggableTask task={p.task} pinned={p.pinned} showProject={false} dense />
           </div>
         ))}
 
         {showNow && (
-          <div className="pointer-events-none absolute inset-x-0 z-20" style={{ top: y(now) + 4 }}>
+          <div className="pointer-events-none absolute inset-x-0 z-20" style={{ top: Y(now) }}>
             <div className="relative h-px bg-cyan">
               <span className="absolute -left-1 -top-[3px] h-[7px] w-[7px] rounded-full bg-cyan" />
             </div>
