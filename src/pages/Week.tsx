@@ -1,11 +1,9 @@
 import { useCallback, useMemo, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useStore } from '../store'
-import { Card, Empty, SectionHeading } from '../components/ui'
 import { DragProvider, DropZone, useDrag } from '../components/DragLayer'
 import { DraggableTask } from '../components/DraggableTask'
 import { TaskForm } from '../components/TaskForm'
-import { WhatNow } from '../components/WhatNow'
 import { MissedTaskPrompt } from '../components/MissedTaskPrompt'
 import { WeeklyReview } from './WeeklyReview'
 import { useToast } from '../components/Toast'
@@ -17,6 +15,7 @@ import {
   formatMinutesOfDay,
   formatShort,
   fromISO,
+  minutesOfDay,
   nowMinutes,
   toHHMM,
   today,
@@ -27,13 +26,23 @@ import {
 import { WEEKDAYS_SHORT } from '../lib/types'
 import type { Commitment, Preferences, Task } from '../lib/types'
 
-const KIND_ICON: Record<string, string> = { training: '🥊', work: '💼', planning: '📝', other: '·' }
+/** Vertical scale for free windows, capped so a 15-hour Saturday stays on screen. */
+const PX_PER_MIN = 0.8
+const MAX_LANE = 340
+const MIN_LANE = 84
+const SNAP = 15
+
+function laneMetrics(seg: DaySegment) {
+  const dur = Math.max(1, seg.end - seg.start)
+  const height = Math.max(MIN_LANE, Math.min(MAX_LANE, dur * PX_PER_MIN))
+  return { dur, height, ppm: height / dur }
+}
 
 function weekNumber(iso: string): number {
   const d = fromISO(iso)
-  const start = new Date(d.getFullYear(), 0, 1)
-  const days = Math.floor((d.getTime() - start.getTime()) / 86400000)
-  return Math.ceil((days + start.getDay() + 1) / 7)
+  const jan1 = new Date(d.getFullYear(), 0, 1)
+  const days = Math.floor((d.getTime() - jan1.getTime()) / 86400000)
+  return Math.ceil((days + jan1.getDay() + 1) / 7)
 }
 
 export function Week() {
@@ -48,104 +57,107 @@ export function Week() {
   const wd = weekdayOf(ref)
   const start = addDays(weekStart(ref), offset * 7)
   const dates = weekDates(start)
-  const reviewDoneThisWeek = reviews.some((r) => r.week_start === weekStart(ref))
+  const reviewDone = reviews.some((r) => r.week_start === weekStart(ref))
 
   const handleDrop = useCallback(
-    async (task: Task, zoneId: string) => {
+    async (task: Task, zoneId: string, ratio: number) => {
       if (zoneId === 'backlog') {
         if (!task.scheduled_date && !task.scheduled_time) return
         await updateTask(task.id, { scheduled_date: null, scheduled_time: null })
-        toast('Moved to side tasks')
+        toast('Unscheduled')
         return
       }
 
-      const [kind, date, rest] = zoneId.split('|')
+      const [kind, date, startStr, endStr] = zoneId.split('|')
 
       if (kind === 'day') {
         if (task.scheduled_date === date && !task.scheduled_time) return
         await updateTask(task.id, { scheduled_date: date, scheduled_time: null })
-        toast(`Moved to ${formatShort(date)} — anytime`, 'success')
+        toast(`${formatShort(date)} — anytime`, 'success')
         return
       }
 
-      if (kind === 'win') {
-        const minute = slotForDrop({
-          date,
-          windowStart: Number(rest),
-          task,
-          tasks,
-          commitments,
-          preferences,
-        })
-        const time = toHHMM(minute)
-        if (task.scheduled_date === date && task.scheduled_time === time) return
-        await updateTask(task.id, { scheduled_date: date, scheduled_time: time })
-        toast(`${formatShort(date)} · ${formatMinutesOfDay(minute)}`, 'success')
+      if (kind !== 'win') return
+
+      const winStart = Number(startStr)
+      const winEnd = Number(endStr)
+
+      // Where in the lane they let go, snapped and kept inside the window.
+      const raw = winStart + ratio * (winEnd - winStart)
+      const latest = Math.max(winStart, winEnd - task.duration_min)
+      let minute = Math.min(latest, Math.max(winStart, Math.round(raw / SNAP) * SNAP))
+
+      // If that would sit on top of another pinned task, use the first gap that fits.
+      const clash = tasks.some(
+        (t) =>
+          t.id !== task.id &&
+          !t.completed &&
+          t.scheduled_date === date &&
+          t.scheduled_time != null &&
+          minutesOfDay(t.scheduled_time) < minute + task.duration_min &&
+          minutesOfDay(t.scheduled_time) + t.duration_min > minute,
+      )
+      if (clash) {
+        minute = slotForDrop({ date, windowStart: winStart, task, tasks, commitments, preferences })
       }
+
+      const time = toHHMM(minute)
+      if (task.scheduled_date === date && task.scheduled_time === time) return
+      await updateTask(task.id, { scheduled_date: date, scheduled_time: time })
+      toast(`${formatShort(date)} · ${formatMinutesOfDay(minute)}`, 'success')
     },
     [updateTask, toast, tasks, commitments, preferences],
   )
 
   return (
     <DragProvider onDrop={handleDrop}>
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 pb-8">
-        <header className="pt-6 pb-5">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-[11px] font-mono font-semibold uppercase tracking-[0.22em] text-cyan mb-1.5">
-                // week {weekNumber(start)}
-              </p>
-              <h1 className="text-3xl sm:text-4xl font-bold text-slate-100 tracking-tight">
-                {formatShort(start)} – {formatShort(addDays(start, 6))}
-              </h1>
-            </div>
-            <div className="flex gap-1.5 shrink-0">
-              <button onClick={() => setOffset((o) => o - 1)} className="btn-ghost px-3">
-                ←
-              </button>
-              <button
-                onClick={() => {
-                  setOffset(0)
-                  setExpanded(ref)
-                }}
-                disabled={offset === 0}
-                className="btn-ghost px-3 text-xs font-mono tracking-wide"
-              >
-                NOW
-              </button>
-              <button onClick={() => setOffset((o) => o + 1)} className="btn-ghost px-3">
-                →
-              </button>
-            </div>
+      <div className="max-w-6xl mx-auto px-4 sm:px-8 pb-16">
+        <header className="pt-8 pb-6 flex items-end justify-between gap-4">
+          <div>
+            <p className="mono-num text-[11px] tracking-[0.2em] text-slate-500 mb-2">WEEK {weekNumber(start)}</p>
+            <h1 className="text-[28px] sm:text-[34px] font-semibold text-slate-50 tracking-tight leading-none">
+              {formatShort(start)} — {formatShort(addDays(start, 6))}
+            </h1>
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setOffset((o) => o - 1)} className="btn-quiet px-2.5 py-1.5" aria-label="Previous week">
+              ←
+            </button>
+            <button
+              onClick={() => {
+                setOffset(0)
+                setExpanded(ref)
+              }}
+              disabled={offset === 0}
+              className="btn-quiet px-2.5 py-1.5 text-xs mono-num tracking-wider"
+            >
+              TODAY
+            </button>
+            <button onClick={() => setOffset((o) => o + 1)} className="btn-quiet px-2.5 py-1.5" aria-label="Next week">
+              →
+            </button>
           </div>
         </header>
 
         <AnimatePresence>
-          {offset === 0 && wd === 0 && !reviewDoneThisWeek && (
+          {offset === 0 && wd === 0 && !reviewDone && (
             <motion.button
-              initial={{ opacity: 0, y: -8, height: 0, marginBottom: 0 }}
-              animate={{ opacity: 1, y: 0, height: 'auto', marginBottom: 20 }}
+              initial={{ opacity: 0, height: 0, marginBottom: 0 }}
+              animate={{ opacity: 1, height: 'auto', marginBottom: 20 }}
               exit={{ opacity: 0, height: 0, marginBottom: 0 }}
-              transition={{ duration: 0.25 }}
               onClick={() => setShowReview(true)}
-              className="w-full text-left card !bg-cyan/10 border-cyan/30 p-4 hover:!bg-cyan/15 transition-colors overflow-hidden"
+              className="w-full overflow-hidden rounded-lg border border-cyan/25 bg-cyan/[0.07] px-4 py-3 text-left
+                hover:bg-cyan/[0.12] transition-colors"
             >
-              <p className="text-sm font-semibold text-cyan-soft font-mono">// It's Sunday — run your weekly review</p>
-              <p className="text-xs text-slate-400 mt-1">
-                What got done, what slipped, and the 3–5 things that matter next week.
-              </p>
+              <p className="text-[13px] font-medium text-cyan-soft">Sunday — run your weekly review</p>
             </motion.button>
           )}
         </AnimatePresence>
 
-        <div className="mb-5">
-          <WhatNow />
-        </div>
-
         <MissedTaskPrompt />
 
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-5 items-start">
-          <div className="space-y-2.5 min-w-0">
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-6 items-start">
+          <div className="space-y-1.5 min-w-0">
             {dates.map((date) => (
               <DayCard
                 key={date}
@@ -189,7 +201,6 @@ function DayCard({
   preferences: Preferences | null
 }) {
   const { tasks, commitments, projects } = useStore()
-  const { dragging } = useDrag()
   const [showDone, setShowDone] = useState(false)
   const wd = weekdayOf(date)
 
@@ -199,60 +210,46 @@ function DayCard({
   )
 
   const dayTasks = useMemo(() => tasks.filter((t) => t.scheduled_date === date), [tasks, date])
-  const doneCount = dayTasks.filter((t) => t.completed).length
-  const openCount = dayTasks.length - doneCount
+  const open = dayTasks.filter((t) => !t.completed).length
+  const done = dayTasks.length - open
   const freeMin = schedule.segments
     .filter((s) => s.kind === 'free')
     .reduce((sum, s) => sum + (s.end - s.start), 0)
 
+  const label = [
+    ...schedule.segments.filter((s) => s.kind === 'commitment').map((s) => s.commitment!.label),
+    ...schedule.anytime.map((c) => c.label),
+  ]
+
   return (
-    <Card className={`!p-0 overflow-hidden ${isToday ? 'hud-corners !border-cyan/35 shadow-glow' : ''}`}>
-      <DropZone
-        id={`day|${date}`}
-        activeClassName="bg-cyan/10"
-        className="border-b border-ink-800/70"
-      >
-        <button onClick={onToggle} className="w-full flex items-center gap-3 px-4 py-3 text-left">
-          <div className="flex flex-col items-center w-10 shrink-0">
-            <span className={`text-[10px] font-mono tracking-widest ${isToday ? 'text-cyan' : 'text-slate-600'}`}>
+    <div
+      className={`rounded-lg border bg-ink-900/60 transition-colors ${
+        isToday ? 'border-cyan/40' : 'border-ink-800'
+      }`}
+    >
+      <DropZone id={`day|${date}`} className="rounded-lg">
+        <button onClick={onToggle} className="w-full flex items-center gap-4 px-3.5 py-3 text-left">
+          <div className="flex items-baseline gap-2 w-[5.5rem] shrink-0">
+            <span className={`mono-num text-[10px] tracking-widest ${isToday ? 'text-cyan' : 'text-slate-600'}`}>
               {WEEKDAYS_SHORT[wd].toUpperCase()}
             </span>
-            <span className={`text-xl font-bold leading-tight ${isToday ? 'text-cyan-soft' : 'text-slate-300'}`}>
+            <span className={`text-lg font-semibold leading-none ${isToday ? 'text-cyan-soft' : 'text-slate-300'}`}>
               {fromISO(date).getDate()}
             </span>
           </div>
 
-          <div className="flex-1 min-w-0">
-            <div className="flex flex-wrap items-center gap-1.5">
-              {schedule.segments
-                .filter((s) => s.kind === 'commitment')
-                .map((s) => (
-                  <span key={s.commitment!.id} className="chip bg-ink-800 text-slate-400 text-[10px] py-0.5">
-                    {KIND_ICON[s.commitment!.kind] ?? '·'} {s.commitment!.label}
-                  </span>
-                ))}
-              {schedule.anytime.map((c) => (
-                <span key={c.id} className="chip bg-ink-800/60 text-slate-500 text-[10px] py-0.5">
-                  {KIND_ICON[c.kind] ?? '·'} {c.label}
-                </span>
-              ))}
-              {schedule.segments.length === 0 && schedule.anytime.length === 0 && (
-                <span className="text-[11px] text-slate-600 font-mono">clear</span>
-              )}
-            </div>
-            <p className="mt-1 text-[11px] text-slate-600 mono-num">
-              {openCount > 0 ? `${openCount} open` : 'nothing open'}
-              {doneCount > 0 && ` · ${doneCount} done`}
-              {freeMin > 0 && ` · ${formatDuration(freeMin)} free`}
-            </p>
-          </div>
+          <p className="flex-1 min-w-0 truncate text-[13px] text-slate-500">
+            {label.length ? label.join(' · ') : 'Nothing scheduled'}
+          </p>
 
-          <div className="flex items-center gap-2 shrink-0">
-            {isToday && <span className="chip bg-cyan/15 text-cyan-soft text-[10px] py-0.5 font-mono">NOW</span>}
+          <div className="flex items-center gap-3 shrink-0">
+            {open > 0 && <span className="mono-num text-[11px] text-slate-400">{open} open</span>}
+            {done > 0 && <span className="mono-num text-[11px] text-lo/70">{done} done</span>}
+            {freeMin > 0 && <span className="mono-num text-[11px] text-slate-600">{formatDuration(freeMin)}</span>}
             <motion.span
               animate={{ rotate: expanded ? 180 : 0 }}
-              transition={{ duration: 0.2 }}
-              className="text-slate-600 text-xs"
+              transition={{ duration: 0.18 }}
+              className="text-slate-600 text-[10px]"
             >
               ▾
             </motion.span>
@@ -266,124 +263,129 @@ function DayCard({
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.22 }}
+            transition={{ duration: 0.2 }}
+            style={{ overflow: 'hidden' }}
           >
-            <div className="p-2 space-y-1.5">
+            <div className="border-t border-ink-800 p-3 space-y-1">
               {schedule.segments.map((seg) =>
                 seg.kind === 'commitment' ? (
-                  <CommitmentBand key={`c|${seg.commitment!.id}`} seg={seg} isToday={isToday} />
+                  <CommitmentBar key={`c${seg.commitment!.id}`} seg={seg} isToday={isToday} />
                 ) : (
-                  <FreeSlot key={`f|${seg.start}`} date={date} seg={seg} isToday={isToday} empty={!dragging} />
+                  <Lane key={`f${seg.start}`} date={date} seg={seg} isToday={isToday} />
                 ),
               )}
 
+              {schedule.segments.length === 0 && (
+                <p className="py-3 text-[12px] text-slate-600">Your commitments fill this day.</p>
+              )}
+
               {schedule.overflow.length > 0 && (
-                <div className="rounded-lg border border-med/30 bg-med/5 p-1.5 space-y-1">
-                  <p className="text-[10px] font-mono uppercase tracking-wider text-med px-1 pb-0.5">
-                    ⚠ no room left — move or shrink
-                  </p>
+                <div className="space-y-1 rounded-md border border-med/25 bg-med/[0.06] p-2">
+                  <p className="mono-num text-[10px] uppercase tracking-wider text-med">Doesn't fit today</p>
                   {schedule.overflow.map((t) => (
                     <DraggableTask key={t.id} task={t} tone="overflow" showProject={false} />
                   ))}
                 </div>
               )}
 
-              {schedule.segments.length === 0 && (
-                <p className="text-[11px] text-slate-600 px-2 py-3 font-mono">
-                  no free time today — your commitments fill it
-                </p>
-              )}
-
-              <div className="flex items-center gap-2 pt-0.5">
-                <button onClick={onAdd} className="btn-quiet text-xs">
-                  + add task
+              <div className="flex items-center gap-1 pt-1">
+                <button onClick={onAdd} className="btn-quiet text-[12px] px-2 py-1">
+                  + Task
                 </button>
                 {schedule.done.length > 0 && (
-                  <button onClick={() => setShowDone((s) => !s)} className="btn-quiet text-xs font-mono">
-                    {showDone ? '▾' : '▸'} done ({schedule.done.length})
+                  <button onClick={() => setShowDone((s) => !s)} className="btn-quiet text-[12px] px-2 py-1">
+                    {showDone ? 'Hide' : 'Show'} {schedule.done.length} done
                   </button>
                 )}
               </div>
 
-              <div
-                className="overflow-hidden transition-[max-height,opacity] duration-300"
-                style={{ maxHeight: showDone ? 2000 : 0, opacity: showDone ? 1 : 0 }}
-              >
-                <div className="space-y-1 pt-1">
+              {showDone && (
+                <div className="space-y-1">
                   {schedule.done.map((t) => (
                     <DraggableTask key={t.id} task={t} draggable={false} showProject={false} />
                   ))}
                 </div>
-              </div>
+              )}
             </div>
           </motion.div>
         )}
       </AnimatePresence>
-    </Card>
-  )
-}
-
-function CommitmentBand({ seg, isToday }: { seg: DaySegment; isToday: boolean }) {
-  const c = seg.commitment as Commitment
-  const now = nowMinutes()
-  const live = isToday && now >= seg.start && now < seg.end
-  return (
-    <div
-      className={`flex items-center gap-3 rounded-lg px-2.5 py-2 bg-ink-800/40 stripe-block ${
-        live ? 'ring-1 ring-cyan/40' : ''
-      }`}
-    >
-      <span className="mono-num text-[11px] text-slate-500 w-[5.5rem] shrink-0">
-        {formatMinutesOfDay(seg.start)}–{formatMinutesOfDay(seg.end)}
-      </span>
-      <span className="text-sm text-slate-400 flex-1 min-w-0 truncate">
-        {KIND_ICON[c.kind] ?? '·'} {c.label}
-      </span>
-      {live && <span className="text-[10px] font-mono text-cyan animate-pulse shrink-0">● LIVE</span>}
     </div>
   )
 }
 
-function FreeSlot({
-  date,
-  seg,
-  isToday,
-  empty,
-}: {
-  date: string
-  seg: DaySegment
-  isToday: boolean
-  empty: boolean
-}) {
+function CommitmentBar({ seg, isToday }: { seg: DaySegment; isToday: boolean }) {
+  const c = seg.commitment as Commitment
   const now = nowMinutes()
   const live = isToday && now >= seg.start && now < seg.end
-  const used = seg.tasks.reduce((sum, p) => sum + p.task.duration_min, 0)
-  const left = Math.max(0, seg.end - seg.start - used)
+  return (
+    <div className="flex items-center gap-3 rounded-md bg-ink-850/60 px-2.5 py-2">
+      <span className="mono-num text-[11px] text-slate-600 w-[6.5rem] shrink-0">
+        {formatMinutesOfDay(seg.start)}–{formatMinutesOfDay(seg.end)}
+      </span>
+      <span className="flex-1 min-w-0 truncate text-[13px] text-slate-500">{c.label}</span>
+      {live && <span className="mono-num text-[10px] text-cyan shrink-0">NOW</span>}
+    </div>
+  )
+}
+
+function Lane({ date, seg, isToday }: { date: string; seg: DaySegment; isToday: boolean }) {
+  const { dragging } = useDrag()
+  const { dur, height, ppm } = laneMetrics(seg)
+  const now = nowMinutes()
+  const liveAt = isToday && now >= seg.start && now < seg.end ? (now - seg.start) * ppm : null
+
+  const tickStep = ppm * 60 < 26 ? 120 : 60
+  const ticks: number[] = []
+  for (let m = Math.ceil(seg.start / tickStep) * tickStep; m < seg.end; m += tickStep) ticks.push(m)
+
+  const used = seg.tasks.reduce((s, p) => s + p.task.duration_min, 0)
+  const left = Math.max(0, dur - used)
 
   return (
     <DropZone
-      id={`win|${date}|${seg.start}`}
-      className="rounded-lg border border-dashed border-ink-700/70 p-1.5"
-      activeClassName="!border-solid border-cyan/70 bg-cyan/10 shadow-glow"
+      id={`win|${date}|${seg.start}|${seg.end}`}
+      className="drop-lane relative rounded-md border border-ink-800/80 bg-ink-950/50"
+      style={{ height }}
     >
-      <div className="flex items-center gap-2 px-1 pb-1">
-        <span className={`mono-num text-[11px] shrink-0 ${live ? 'text-cyan' : 'text-slate-500'}`}>
-          {formatMinutesOfDay(seg.start)}–{formatMinutesOfDay(seg.end)}
-        </span>
-        <span className="h-px flex-1 bg-gradient-to-r from-ink-700 to-transparent" />
-        {live && <span className="text-[10px] font-mono text-cyan shrink-0">◂ now</span>}
-        {left > 0 && <span className="text-[10px] font-mono text-slate-600 shrink-0">{formatDuration(left)} free</span>}
-      </div>
+      {ticks.map((m) => (
+        <div key={m} className="absolute inset-x-0 border-t border-ink-800/60" style={{ top: (m - seg.start) * ppm }}>
+          <span className="mono-num absolute left-1.5 -top-[7px] bg-ink-950/50 pr-1 text-[9px] text-slate-700">
+            {formatMinutesOfDay(m)}
+          </span>
+        </div>
+      ))}
 
-      <div className="space-y-1">
+      <span className="mono-num absolute left-1.5 top-1 text-[9px] text-slate-600">
+        {formatMinutesOfDay(seg.start)}
+      </span>
+      {left > 0 && !dragging && (
+        <span className="mono-num absolute right-1.5 top-1 text-[9px] text-slate-700">
+          {formatDuration(left)} free
+        </span>
+      )}
+      {dragging && (
+        <span className="mono-num absolute right-1.5 top-1 text-[9px] text-cyan/80">drop to set a time</span>
+      )}
+
+      {liveAt != null && (
+        <div className="absolute inset-x-0 z-20 pointer-events-none" style={{ top: liveAt }}>
+          <div className="relative h-px bg-cyan/70">
+            <span className="absolute -left-[3px] -top-[3px] h-[7px] w-[7px] rounded-full bg-cyan" />
+          </div>
+        </div>
+      )}
+
+      <div className="absolute inset-y-0 left-12 right-1.5">
         {seg.tasks.map((p) => (
-          <DraggableTask key={p.task.id} task={p.task} at={p.start} pinned={p.pinned} showProject={false} />
+          <div
+            key={p.task.id}
+            className="absolute inset-x-0"
+            style={{ top: (p.start - seg.start) * ppm, height: Math.max(26, p.task.duration_min * ppm) }}
+          >
+            <DraggableTask task={p.task} at={p.start} pinned={p.pinned} showProject={false} compact />
+          </div>
         ))}
-        {seg.tasks.length === 0 && (
-          <p className={`px-1 py-1 text-[11px] font-mono ${empty ? 'text-slate-700' : 'text-cyan-soft'}`}>
-            {empty ? 'free' : 'drop here'}
-          </p>
-        )}
       </div>
     </DropZone>
   )
@@ -395,7 +397,7 @@ function Sidebar({ onAdd }: { onAdd: () => void }) {
   const [showCompleted, setShowCompleted] = useState(false)
   const ref = today()
 
-  const sideTasks = useMemo(() => {
+  const side = useMemo(() => {
     const open = tasks.filter((t) => !t.completed && !t.scheduled_date)
     return rankTasks(open, { ref, projects, preferences }).map((s) => s.task)
   }, [tasks, ref, projects, preferences])
@@ -407,48 +409,45 @@ function Sidebar({ onAdd }: { onAdd: () => void }) {
 
   return (
     <div className="lg:sticky lg:top-6">
-      <SectionHeading
-        title={`Side tasks (${sideTasks.length})`}
-        action={
-          <button onClick={onAdd} className="btn-quiet text-xs px-2 py-1">
-            + Add
-          </button>
-        }
-      />
+      <div className="flex items-center justify-between mb-2.5">
+        <h2 className="text-[13px] font-medium text-slate-300">
+          Side tasks <span className="mono-num text-slate-600">{side.length}</span>
+        </h2>
+        <button onClick={onAdd} className="btn-quiet text-[12px] px-2 py-1">
+          + Add
+        </button>
+      </div>
 
-      <DropZone
-        id="backlog"
-        className="rounded-xl border border-dashed border-ink-700/70 p-1.5 min-h-[6rem]"
-        activeClassName="!border-solid border-cyan/70 bg-cyan/10 shadow-glow"
-      >
-        {sideTasks.length === 0 ? (
-          <Empty icon="📋" text={dragging ? 'Drop to unschedule' : 'Nothing waiting.'} />
+      <DropZone id="backlog" className="drop-lane rounded-lg border border-ink-800 bg-ink-900/40 p-1.5 min-h-[7rem]">
+        {side.length === 0 ? (
+          <p className="px-1.5 py-6 text-center text-[12px] text-slate-600">
+            {dragging ? 'Drop here to unschedule' : 'Nothing waiting.'}
+          </p>
         ) : (
           <div className="space-y-1">
-            {sideTasks.map((t) => (
+            {side.map((t) => (
               <DraggableTask key={t.id} task={t} />
             ))}
           </div>
         )}
       </DropZone>
 
-      <p className="text-[10px] font-mono text-slate-600 mt-2 px-1">drag ⠿ onto a day or time slot</p>
+      <p className="mt-2.5 px-0.5 text-[11px] leading-relaxed text-slate-600">
+        Drag a task onto a time slot to schedule it, onto a day row for “anytime”, or back here to unschedule.
+      </p>
 
       {completed.length > 0 && (
-        <div className="pt-3">
-          <button onClick={() => setShowCompleted((s) => !s)} className="btn-quiet text-xs px-2 py-1 font-mono">
-            {showCompleted ? '▾' : '▸'} completed ({completed.length})
+        <div className="mt-5">
+          <button onClick={() => setShowCompleted((s) => !s)} className="btn-quiet text-[12px] px-2 py-1">
+            {showCompleted ? 'Hide' : 'Show'} completed ({completed.length})
           </button>
-          <div
-            className="overflow-hidden transition-[max-height,opacity] duration-300"
-            style={{ maxHeight: showCompleted ? 4000 : 0, opacity: showCompleted ? 1 : 0 }}
-          >
+          {showCompleted && (
             <div className="space-y-1 mt-2">
               {completed.slice(0, 40).map((t) => (
                 <DraggableTask key={t.id} task={t} draggable={false} />
               ))}
             </div>
-          </div>
+          )}
         </div>
       )}
     </div>

@@ -10,11 +10,6 @@
   body {
     @apply bg-ink-950 text-slate-200 antialiased;
     -webkit-tap-highlight-color: transparent;
-    background-image:
-      linear-gradient(rgba(34, 229, 255, 0.035) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(34, 229, 255, 0.035) 1px, transparent 1px);
-    background-size: 42px 42px;
-    background-attachment: fixed;
   }
   * {
     @apply border-ink-700;
@@ -66,63 +61,14 @@
   }
 }
 
-/* Diagonal hatching for time that's already committed and can't take tasks */
-.stripe-block {
-  background-image: repeating-linear-gradient(
-    -45deg,
-    rgba(148, 163, 184, 0.05) 0,
-    rgba(148, 163, 184, 0.05) 1px,
-    transparent 1px,
-    transparent 7px
-  );
+/* Drop target highlight — toggled imperatively during a drag, no re-render. */
+.drop-lane.drop-target {
+  border-color: rgba(34, 229, 255, 0.55);
+  background-color: rgba(34, 229, 255, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(34, 229, 255, 0.25);
 }
-
-/* HUD-style corner brackets for the "active" day / focal elements */
-.hud-corners {
-  position: relative;
-}
-.hud-corners::before,
-.hud-corners::after {
-  content: '';
-  position: absolute;
-  width: 10px;
-  height: 10px;
-  border-color: theme('colors.cyan.DEFAULT');
-  opacity: 0.7;
-  pointer-events: none;
-}
-.hud-corners::before {
-  top: -1px;
-  left: -1px;
-  border-top: 2px solid;
-  border-left: 2px solid;
-  border-top-left-radius: 4px;
-}
-.hud-corners::after {
-  bottom: -1px;
-  right: -1px;
-  border-bottom: 2px solid;
-  border-right: 2px solid;
-  border-bottom-right-radius: 4px;
-}
-
-@keyframes breathe {
-  0%,
-  100% {
-    box-shadow: 0 2px 12px -2px rgba(91, 140, 255, 0.5);
-  }
-  50% {
-    box-shadow: 0 4px 26px -2px rgba(91, 140, 255, 0.85);
-  }
-}
-.animate-breathe {
-  animation: breathe 2.8s ease-in-out infinite;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .animate-breathe {
-    animation: none;
-  }
+.drop-target > button {
+  background-color: rgba(34, 229, 255, 0.07);
 }
 
 ::-webkit-scrollbar {

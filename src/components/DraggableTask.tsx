@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import type { MouseEvent, PointerEvent } from 'react'
-import { motion } from 'framer-motion'
 import { useStore } from '../store'
 import { useToast } from './Toast'
 import { useDrag } from './DragLayer'
@@ -18,12 +17,13 @@ const DUE_TONE: Record<string, string> = {
 
 export function DraggableTask({
   task,
-  /** Minutes-of-day this task sits at, when shown inside the calendar. */
   at,
   pinned = false,
   showProject = true,
   draggable = true,
   tone = 'normal',
+  /** Fills its container and drops the second line — for short calendar blocks. */
+  compact = false,
 }: {
   task: Task
   at?: number
@@ -31,10 +31,11 @@ export function DraggableTask({
   showProject?: boolean
   draggable?: boolean
   tone?: 'normal' | 'overflow'
+  compact?: boolean
 }) {
   const { toggleTask, deleteTask, projects } = useStore()
   const toast = useToast()
-  const { begin, dragging } = useDrag()
+  const { begin, dragging, didJustDrag } = useDrag()
   const [editing, setEditing] = useState(false)
   const [busy, setBusy] = useState(false)
 
@@ -44,6 +45,7 @@ export function DraggableTask({
   const isDragging = dragging?.id === task.id
 
   async function onToggle() {
+    if (didJustDrag()) return
     setBusy(true)
     try {
       await toggleTask(task)
@@ -54,6 +56,7 @@ export function DraggableTask({
 
   async function onDelete(e: MouseEvent) {
     e.stopPropagation()
+    if (didJustDrag()) return
     setBusy(true)
     try {
       await deleteTask(task.id)
@@ -63,88 +66,103 @@ export function DraggableTask({
     }
   }
 
-  function onHandleDown(e: PointerEvent) {
+  // Mouse: press anywhere on the row. Under the threshold it stays a click.
+  // Touch is excluded here so a finger on the row still scrolls the page —
+  // on touch you drag by the grip, which opts out of scrolling.
+  function onPointerDown(e: PointerEvent) {
+    if (!draggable || e.button !== 0 || e.pointerType === 'touch') return
+    begin(task, e)
+  }
+
+  function onGripDown(e: PointerEvent) {
     if (!draggable) return
-    e.preventDefault()
     e.stopPropagation()
     begin(task, e)
   }
 
-  const accent = task.completed
-    ? 'border-l-transparent'
+  const edge = task.completed
+    ? 'before:bg-ink-700'
     : tone === 'overflow'
-      ? 'border-l-med/70'
+      ? 'before:bg-med'
       : pinned
-        ? 'border-l-cyan/80'
-        : 'border-l-ink-600'
+        ? 'before:bg-cyan'
+        : 'before:bg-ink-600'
 
   return (
     <>
-      <motion.div
-        layout="position"
-        className={`group flex items-start gap-1 rounded-lg border border-ink-800/70 border-l-2 bg-ink-900/80
-          px-1.5 py-1.5 transition-[opacity,border-color] hover:border-ink-700 ${accent}
-          ${isDragging ? 'opacity-30' : ''}`}
+      <div
+        onPointerDown={onPointerDown}
+        className={`group relative flex items-stretch gap-2 overflow-hidden rounded-md bg-ink-850
+          pr-1 select-none transition-colors hover:bg-ink-800
+          before:absolute before:inset-y-0 before:left-0 before:w-[3px] before:content-[''] ${edge}
+          ${compact ? 'h-full' : ''}
+          ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}
+          ${isDragging ? 'opacity-25' : ''}`}
       >
         <button
-          onPointerDown={onHandleDown}
+          onPointerDown={onGripDown}
           disabled={!draggable}
           aria-label={`Drag ${task.name}`}
-          className={`mt-0.5 shrink-0 h-5 w-3 flex items-center justify-center touch-none ${
-            draggable ? 'text-slate-600 hover:text-cyan cursor-grab active:cursor-grabbing' : 'text-ink-800 cursor-default'
+          tabIndex={-1}
+          className={`shrink-0 w-4 flex items-center justify-center touch-none ${
+            draggable
+              ? 'text-slate-600 group-hover:text-slate-400 cursor-grab active:cursor-grabbing'
+              : 'text-transparent cursor-default'
           }`}
         >
-          <svg viewBox="0 0 10 16" className="h-3.5 w-2.5" fill="currentColor">
-            <circle cx="2" cy="3" r="1.3" />
-            <circle cx="8" cy="3" r="1.3" />
-            <circle cx="2" cy="8" r="1.3" />
-            <circle cx="8" cy="8" r="1.3" />
-            <circle cx="2" cy="13" r="1.3" />
-            <circle cx="8" cy="13" r="1.3" />
+          <svg viewBox="0 0 6 14" className="h-3 w-1.5" fill="currentColor" aria-hidden="true">
+            <circle cx="1" cy="2" r="1" />
+            <circle cx="5" cy="2" r="1" />
+            <circle cx="1" cy="7" r="1" />
+            <circle cx="5" cy="7" r="1" />
+            <circle cx="1" cy="12" r="1" />
+            <circle cx="5" cy="12" r="1" />
           </svg>
         </button>
 
-        <motion.button
+        <button
           onClick={onToggle}
           disabled={busy}
-          whileTap={{ scale: 0.85 }}
           aria-label={task.completed ? `Mark ${task.name} not done` : `Complete ${task.name}`}
-          className={`mt-0.5 h-[18px] w-[18px] shrink-0 rounded border-2 flex items-center justify-center transition-colors ${
+          className={`self-center shrink-0 h-[17px] w-[17px] rounded-[4px] border flex items-center justify-center transition-colors ${
             task.completed ? 'bg-lo border-lo text-ink-950' : 'border-ink-600 hover:border-cyan text-transparent'
           }`}
         >
-          <motion.svg
-            viewBox="0 0 12 12"
-            className="h-2.5 w-2.5"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.5"
-            initial={false}
-            animate={{ scale: task.completed ? 1 : 0 }}
-            transition={{ type: 'spring', stiffness: 500, damping: 22 }}
-          >
+          <svg viewBox="0 0 12 12" className="h-2.5 w-2.5" fill="none" stroke="currentColor" strokeWidth="2.6">
             <path d="M2 6.5 4.5 9 10 3" strokeLinecap="round" strokeLinejoin="round" />
-          </motion.svg>
-        </motion.button>
+          </svg>
+        </button>
 
-        <button onClick={() => setEditing(true)} className="flex-1 min-w-0 text-left">
-          <div className="flex items-baseline gap-1.5">
-            {!task.completed && <span className="text-[10px] leading-none shrink-0">{meta.dot}</span>}
-            <span className={`text-sm leading-snug ${task.completed ? 'line-through text-slate-500' : 'text-slate-200'}`}>
+        <button
+          onClick={() => {
+            if (!didJustDrag()) setEditing(true)
+          }}
+          className={`flex-1 min-w-0 self-center text-left ${compact ? 'py-1' : 'py-2'}`}
+        >
+          <div className="flex items-center gap-1.5 min-w-0">
+            {!task.completed && <span className="text-[9px] leading-none shrink-0">{meta.dot}</span>}
+            <span
+              className={`truncate text-[13px] leading-tight ${
+                task.completed ? 'line-through text-slate-600' : 'text-slate-100'
+              }`}
+            >
               {task.name}
             </span>
+            {compact && at != null && !task.completed && (
+              <span className={`mono-num ml-auto pl-2 text-[10px] shrink-0 ${pinned ? 'text-cyan' : 'text-slate-500'}`}>
+                {formatMinutesOfDay(at)}
+              </span>
+            )}
           </div>
-          {!task.completed && (
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5 text-[11px] text-slate-500">
+
+          {!compact && !task.completed && (
+            <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-500">
               {at != null && (
-                <span className={`mono-num font-medium ${pinned ? 'text-cyan-soft' : 'text-slate-500'}`}>
-                  {formatMinutesOfDay(at)}
-                  {pinned && <span className="ml-0.5 opacity-70">•</span>}
-                </span>
+                <span className={`mono-num ${pinned ? 'text-cyan' : 'text-slate-500'}`}>{formatMinutesOfDay(at)}</span>
               )}
-              <span>{formatDuration(task.duration_min)}</span>
+              <span className="mono-num">{formatDuration(task.duration_min)}</span>
               {due && <span className={DUE_TONE[due.tone]}>{due.text}</span>}
-              {showProject && project && <span className="truncate max-w-[10rem]">{project.name}</span>}
+              {showProject && project && <span className="truncate">{project.name}</span>}
             </div>
           )}
         </button>
@@ -153,18 +171,14 @@ export function DraggableTask({
           onClick={onDelete}
           disabled={busy}
           aria-label={`Delete ${task.name}`}
-          className="mt-0.5 shrink-0 h-5 w-5 flex items-center justify-center rounded text-slate-600
-            opacity-60 sm:opacity-0 sm:group-hover:opacity-100 hover:!opacity-100 hover:text-hi hover:bg-hi/10 transition-all"
+          className="self-center shrink-0 h-6 w-6 flex items-center justify-center rounded text-slate-600
+            opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-hi transition-opacity"
         >
-          <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.6">
-            <path
-              d="M3 4h10M6.5 4V2.8c0-.4.3-.8.8-.8h1.4c.5 0 .8.4.8.8V4M4.5 4l.6 9c0 .6.5 1 1 1h3.8c.5 0 1-.4 1-1l.6-9"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
+          <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.7">
+            <path d="M4 4l8 8M12 4l-8 8" strokeLinecap="round" />
           </svg>
         </button>
-      </motion.div>
+      </div>
 
       <TaskForm open={editing} onClose={() => setEditing(false)} task={task} />
     </>

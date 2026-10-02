@@ -35,10 +35,7 @@ export function SectionHeading({
 }) {
   return (
     <div className={`flex items-center justify-between gap-3 mb-3 ${className}`}>
-      <h2 className="section-title">
-        <span className="text-cyan/70 mr-1">▸</span>
-        {title}
-      </h2>
+      <h2 className="section-title">{title}</h2>
       {action}
     </div>
   )

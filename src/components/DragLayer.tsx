@@ -5,16 +5,21 @@ import { formatDuration } from '../lib/dates'
 import { PRIORITY_META } from '../lib/types'
 import type { Task } from '../lib/types'
 
-/** Movement before a press turns into a drag, so taps don't reschedule things. */
+/** Movement before a press becomes a drag, so taps still click. */
 const THRESHOLD = 5
-const EDGE = 90
-const EDGE_SPEED = 14
+const EDGE = 100
+const EDGE_SPEED = 18
+
+interface Hit {
+  id: string
+  el: HTMLElement
+}
 
 interface DragContextValue {
   begin: (task: Task, e: ReactPointerEvent) => void
-  /** The task being dragged, once past the movement threshold. */
   dragging: Task | null
-  hovered: string | null
+  /** True just after a drag finished, so the trailing click can be ignored. */
+  didJustDrag: () => boolean
   registerZone: (id: string) => (el: HTMLElement | null) => void
 }
 
@@ -31,18 +36,22 @@ export function DragProvider({
   onDrop,
 }: {
   children: ReactNode
-  onDrop: (task: Task, zoneId: string) => void
+  /** ratio is how far down the drop zone the pointer landed, 0–1. */
+  onDrop: (task: Task, zoneId: string, ratio: number) => void
 }) {
   const zones = useRef(new Map<string, HTMLElement>())
-  const origin = useRef({ x: 0, y: 0 })
-  const pointer = useRef({ x: 0, y: 0 })
+  const ghostRef = useRef<HTMLDivElement>(null)
+  const highlighted = useRef<HTMLElement | null>(null)
+  const hit = useRef<Hit | null>(null)
   const candidate = useRef<Task | null>(null)
   const active = useRef(false)
-  const scrollFrame = useRef<number | null>(null)
+  const origin = useRef({ x: 0, y: 0 })
+  const pointer = useRef({ x: 0, y: 0 })
+  const frame = useRef<number | null>(null)
+  const endedAt = useRef(0)
 
+  // Only changes at drag start/end — never per pointer move.
   const [dragging, setDragging] = useState<Task | null>(null)
-  const [ghost, setGhost] = useState({ x: 0, y: 0 })
-  const [hovered, setHovered] = useState<string | null>(null)
 
   const registerZone = useCallback(
     (id: string) => (el: HTMLElement | null) => {
@@ -52,21 +61,28 @@ export function DragProvider({
     [],
   )
 
-  /** Smallest zone containing the point wins, so inner slots beat their day card. */
-  const hitTest = useCallback((x: number, y: number): string | null => {
-    let best: { id: string; area: number } | null = null
+  /** Smallest zone under the point wins, so a time slot beats its day card. */
+  const hitTest = useCallback((x: number, y: number): Hit | null => {
+    let best: (Hit & { area: number }) | null = null
     for (const [id, el] of zones.current) {
       const r = el.getBoundingClientRect()
       if (x < r.left || x > r.right || y < r.top || y > r.bottom) continue
       const area = r.width * r.height
-      if (!best || area < best.area) best = { id, area }
+      if (!best || area < best.area) best = { id, el, area }
     }
-    return best?.id ?? null
+    return best ? { id: best.id, el: best.el } : null
   }, [])
 
-  const stopAutoScroll = useCallback(() => {
-    if (scrollFrame.current != null) cancelAnimationFrame(scrollFrame.current)
-    scrollFrame.current = null
+  const setHighlight = useCallback((el: HTMLElement | null) => {
+    if (highlighted.current === el) return
+    highlighted.current?.classList.remove('drop-target')
+    el?.classList.add('drop-target')
+    highlighted.current = el
+  }, [])
+
+  const stopScroll = useCallback(() => {
+    if (frame.current != null) cancelAnimationFrame(frame.current)
+    frame.current = null
   }, [])
 
   const begin = useCallback((task: Task, e: ReactPointerEvent) => {
@@ -76,36 +92,61 @@ export function DragProvider({
     pointer.current = { x: e.clientX, y: e.clientY }
   }, [])
 
+  const didJustDrag = useCallback(() => Date.now() - endedAt.current < 250, [])
+
   useEffect(() => {
+    function paint(x: number, y: number) {
+      const g = ghostRef.current
+      if (!g) return
+      g.style.transform = `translate3d(${x}px, ${y}px, 0)`
+      g.style.visibility = 'visible'
+    }
+
+    function autoScroll() {
+      const y = pointer.current.y
+      if (y < EDGE) window.scrollBy(0, -EDGE_SPEED * (1 - y / EDGE))
+      else if (y > window.innerHeight - EDGE)
+        window.scrollBy(0, EDGE_SPEED * (1 - (window.innerHeight - y) / EDGE))
+      frame.current = requestAnimationFrame(autoScroll)
+    }
+
     function onMove(e: PointerEvent) {
       if (!candidate.current) return
       pointer.current = { x: e.clientX, y: e.clientY }
 
       if (!active.current) {
-        const dx = e.clientX - origin.current.x
-        const dy = e.clientY - origin.current.y
-        if (Math.hypot(dx, dy) < THRESHOLD) return
+        if (Math.hypot(e.clientX - origin.current.x, e.clientY - origin.current.y) < THRESHOLD) return
         active.current = true
         setDragging(candidate.current)
+        frame.current = requestAnimationFrame(autoScroll)
       }
 
       e.preventDefault()
-      setGhost({ x: e.clientX, y: e.clientY })
-      const id = hitTest(e.clientX, e.clientY)
-      setHovered((prev) => (prev === id ? prev : id))
+      paint(e.clientX, e.clientY)
+      const next = hitTest(e.clientX, e.clientY)
+      hit.current = next
+      setHighlight(next?.el ?? null)
     }
 
     function onUp() {
       const task = candidate.current
-      const wasActive = active.current
+      const wasDrag = active.current
       candidate.current = null
       active.current = false
-      stopAutoScroll()
+      stopScroll()
+      setHighlight(null)
+      if (ghostRef.current) ghostRef.current.style.visibility = 'hidden'
+
+      if (!wasDrag) return
+      endedAt.current = Date.now()
       setDragging(null)
-      setHovered(null)
-      if (!task || !wasActive) return
-      const id = hitTest(pointer.current.x, pointer.current.y)
-      if (id) onDrop(task, id)
+
+      const target = hit.current
+      hit.current = null
+      if (!task || !target) return
+      const r = target.el.getBoundingClientRect()
+      const ratio = r.height > 0 ? (pointer.current.y - r.top) / r.height : 0
+      onDrop(task, target.id, Math.max(0, Math.min(1, ratio)))
     }
 
     window.addEventListener('pointermove', onMove, { passive: false })
@@ -115,70 +156,50 @@ export function DragProvider({
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
       window.removeEventListener('pointercancel', onUp)
+      stopScroll()
     }
-  }, [hitTest, onDrop, stopAutoScroll])
-
-  // Scroll the page when the pointer is held near the top or bottom edge.
-  useEffect(() => {
-    if (!dragging) return
-    function tick() {
-      const y = pointer.current.y
-      if (y < EDGE) window.scrollBy(0, -EDGE_SPEED * (1 - y / EDGE))
-      else if (y > window.innerHeight - EDGE)
-        window.scrollBy(0, EDGE_SPEED * (1 - (window.innerHeight - y) / EDGE))
-      scrollFrame.current = requestAnimationFrame(tick)
-    }
-    scrollFrame.current = requestAnimationFrame(tick)
-    return stopAutoScroll
-  }, [dragging, stopAutoScroll])
+  }, [hitTest, onDrop, setHighlight, stopScroll])
 
   return (
-    <DragContext.Provider value={{ begin, dragging, hovered, registerZone }}>
+    <DragContext.Provider value={{ begin, dragging, didJustDrag, registerZone }}>
       {children}
-      {dragging &&
-        createPortal(
-          <div
-            className="fixed z-[200] pointer-events-none select-none -translate-y-1/2 translate-x-3"
-            style={{ left: ghost.x, top: ghost.y }}
-          >
-            <div
-              className="flex items-center gap-2 rounded-lg border border-cyan/60 bg-ink-900/95 px-3 py-2
-                shadow-[0_0_0_1px_rgba(34,229,255,.25),0_18px_40px_-10px_rgba(0,0,0,.8)] backdrop-blur rotate-1"
-            >
-              <span className="text-[10px] leading-none">{PRIORITY_META[dragging.priority].dot}</span>
-              <span className="text-sm font-medium text-slate-100 max-w-[14rem] truncate">{dragging.name}</span>
-              <span className="mono-num text-[11px] text-cyan-soft">{formatDuration(dragging.duration_min)}</span>
-            </div>
-          </div>,
-          document.body,
-        )}
+      {createPortal(
+        <div
+          ref={ghostRef}
+          className="fixed left-0 top-0 z-[200] pointer-events-none select-none"
+          style={{ visibility: 'hidden' }}
+        >
+          <div className="-translate-y-1/2 translate-x-4">
+            {dragging && (
+              <div className="flex items-center gap-2 rounded-md border border-cyan/50 bg-ink-900 px-2.5 py-1.5 shadow-2xl">
+                <span className="text-[10px] leading-none">{PRIORITY_META[dragging.priority].dot}</span>
+                <span className="text-[13px] font-medium text-slate-100 max-w-[13rem] truncate">{dragging.name}</span>
+                <span className="mono-num text-[11px] text-cyan">{formatDuration(dragging.duration_min)}</span>
+              </div>
+            )}
+          </div>
+        </div>,
+        document.body,
+      )}
     </DragContext.Provider>
   )
 }
 
-/** Wraps a droppable area; highlights itself while the pointer is over it mid-drag. */
+/** A droppable area. Highlighting is applied imperatively, so this never re-renders mid-drag. */
 export function DropZone({
   id,
   children,
   className = '',
-  activeClassName = 'border-cyan/70 bg-cyan/10 shadow-glow',
-  idleClassName = '',
+  style,
 }: {
   id: string
   children: ReactNode
   className?: string
-  activeClassName?: string
-  idleClassName?: string
+  style?: React.CSSProperties
 }) {
-  const { registerZone, dragging, hovered } = useDrag()
-  const isTarget = dragging != null && hovered === id
+  const { registerZone } = useDrag()
   return (
-    <div
-      ref={registerZone(id)}
-      className={`transition-[background-color,border-color,box-shadow] duration-150 ${className} ${
-        isTarget ? activeClassName : idleClassName
-      }`}
-    >
+    <div ref={registerZone(id)} className={className} style={style}>
       {children}
     </div>
   )
