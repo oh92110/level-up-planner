@@ -2,13 +2,15 @@ import { useEffect, useState } from 'react'
 import { useStore } from '../store'
 import { Field, Modal } from './ui'
 import { useToast } from './Toast'
-import { today } from '../lib/dates'
+import { formatDuration, minutesOfDay, timeOptions, toHHMM, today } from '../lib/dates'
 import { WEEKDAYS } from '../lib/types'
 import type { Priority, Task } from '../lib/types'
 
 const DURATIONS = [15, 20, 30, 45, 60, 90]
 /** Anything longer than this should be split into steps, not scheduled whole. */
 const OVERSIZED_MIN = 90
+const DAY_START = 6 * 60
+const DAY_END = 23 * 60
 
 interface Draft {
   name: string
@@ -16,6 +18,8 @@ interface Draft {
   priority: Priority
   due_date: string
   scheduled_date: string
+  /** "HH:MM" start, only used when the task is given a day. */
+  scheduled_time: string
   duration_min: number
   project_id: string
   milestone_id: string
@@ -30,6 +34,7 @@ function draftFrom(task?: Task, defaults?: Partial<Draft>): Draft {
     priority: task?.priority ?? 'medium',
     due_date: task?.due_date ?? '',
     scheduled_date: task?.scheduled_date ?? '',
+    scheduled_time: task?.scheduled_time ?? '',
     duration_min: task?.duration_min ?? 30,
     project_id: task?.project_id ?? '',
     milestone_id: task?.milestone_id ?? '',
@@ -63,6 +68,8 @@ export function TaskForm({
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((prev) => ({ ...prev, [k]: v }))
 
   const projectMilestones = milestones.filter((m) => m.project_id === d.project_id && !m.completed)
+  // A task given a day needs a start; default to 6 PM rather than leaving it blank.
+  const startTime = d.scheduled_time || '18:00'
   const oversized = d.duration_min > OVERSIZED_MIN
 
   async function save() {
@@ -87,6 +94,8 @@ export function TaskForm({
           priority: d.priority,
           due_date: d.due_date || null,
           scheduled_date: d.scheduled_date || null,
+          // A time only means something alongside a day.
+          scheduled_time: d.scheduled_date ? d.scheduled_time || null : null,
           duration_min: d.duration_min,
           project_id: d.project_id || null,
           milestone_id: d.milestone_id || null,
@@ -150,37 +159,73 @@ export function TaskForm({
           </div>
         </div>
 
-        <div>
-          <label className="label">How long will it take</label>
-          <div className="flex flex-wrap gap-2">
-            {DURATIONS.map((m) => (
-              <button
-                key={m}
-                onClick={() => set('duration_min', m)}
-                className={`btn text-xs px-3 ${
-                  d.duration_min === m ? 'bg-ink-700 text-slate-100 ring-1 ring-accent/50' : 'btn-ghost'
-                }`}
+        {d.scheduled_date && !d.recurring ? (
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Start">
+              <select
+                value={startTime}
+                onChange={(e) => {
+                  const next = minutesOfDay(e.target.value)
+                  set('scheduled_time', e.target.value)
+                  set('duration_min', Math.max(15, Math.min(DAY_END - next, d.duration_min)))
+                }}
+                className="w-full"
               >
-                {m < 60 ? `${m}m` : m === 60 ? '1h' : '1.5h'}
-              </button>
-            ))}
-            <input
-              type="number"
-              min={5}
-              step={5}
-              value={d.duration_min}
-              onChange={(e) => set('duration_min', Math.max(5, Number(e.target.value) || 5))}
-              className="w-20 text-xs"
-              aria-label="Custom duration in minutes"
-            />
+                {timeOptions(DAY_START, DAY_END - 15).map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Finish">
+              <select
+                value={toHHMM(minutesOfDay(startTime) + d.duration_min)}
+                onChange={(e) => set('duration_min', minutesOfDay(e.target.value) - minutesOfDay(startTime))}
+                className="w-full"
+              >
+                {timeOptions(minutesOfDay(startTime) + 15, DAY_END).map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <p className="col-span-2 -mt-1 text-xs text-slate-500">{formatDuration(d.duration_min)}</p>
           </div>
-          {oversized && (
-            <p className="text-xs text-med mt-2 leading-relaxed">
-              Over 90 minutes is usually a sign this is more than one task. Consider splitting it into steps you
-              can finish in one sitting.
-            </p>
-          )}
-        </div>
+        ) : (
+          <div>
+            <label className="label">How long will it take</label>
+            <div className="flex flex-wrap gap-2">
+              {DURATIONS.map((m) => (
+                <button
+                  key={m}
+                  onClick={() => set('duration_min', m)}
+                  className={`btn text-xs px-3 ${
+                    d.duration_min === m ? 'bg-ink-700 text-slate-100 ring-1 ring-accent/50' : 'btn-ghost'
+                  }`}
+                >
+                  {m < 60 ? `${m}m` : m === 60 ? '1h' : '1.5h'}
+                </button>
+              ))}
+              <input
+                type="number"
+                min={5}
+                step={5}
+                value={d.duration_min}
+                onChange={(e) => set('duration_min', Math.max(5, Number(e.target.value) || 5))}
+                className="w-20 text-xs"
+                aria-label="Custom duration in minutes"
+              />
+            </div>
+            {oversized && (
+              <p className="text-xs text-med mt-2 leading-relaxed">
+                Over 90 minutes is usually a sign this is more than one task. Consider splitting it into steps you
+                can finish in one sitting.
+              </p>
+            )}
+          </div>
+        )}
 
         {!task && (
           <label className="flex items-center gap-2.5 text-sm text-slate-300 cursor-pointer">

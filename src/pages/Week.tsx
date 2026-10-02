@@ -5,6 +5,7 @@ import { DragProvider, DropZone, useDrag } from '../components/DragLayer'
 import { DraggableTask } from '../components/DraggableTask'
 import { TaskForm } from '../components/TaskForm'
 import { MissedTaskPrompt } from '../components/MissedTaskPrompt'
+import { ScheduleDialog } from '../components/ScheduleDialog'
 import { WeeklyReview } from './WeeklyReview'
 import { useToast } from '../components/Toast'
 import { daySchedule, rankTasks } from '../lib/engine'
@@ -135,6 +136,7 @@ export function Week() {
   const [addFor, setAddFor] = useState<string | null>(null)
   const [showReview, setShowReview] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(today())
+  const [pending, setPending] = useState<{ task: Task; date: string; start: string } | null>(null)
 
   const ref = today()
   const wd = weekdayOf(ref)
@@ -152,22 +154,12 @@ export function Week() {
       }
 
       const [kind, date] = zoneId.split('|')
+      if (kind !== 'day' && kind !== 'track') return
 
-      if (kind === 'day') {
-        if (task.scheduled_date === date && !task.scheduled_time) return
-        await updateTask(task.id, { scheduled_date: date, scheduled_time: null })
-        toast(`${formatShort(date)} — anytime`, 'success')
-        return
-      }
-      if (kind !== 'track') return
-
-      // The track's scale is piecewise (long commitments fold up), so convert
-      // the drop position back through the same layout the track was drawn with.
+      // Where the drop landed, used only to preselect the start time — the
+      // actual start and finish are confirmed in the dialog.
       const schedule = daySchedule(date, commitments, tasks, projects, preferences)
       const { spans, total } = buildLayout(schedule, allPlaced(schedule))
-      const raw = yToMinute(spans, ratio * total)
-
-      // Always land on a whole hour.
       const dur = task.duration_min
       const lastHour = Math.floor((DAY_END - dur) / 60) * 60
       const snap = (m: number) => Math.max(DAY_START, Math.min(lastHour, Math.round(m / 60) * 60))
@@ -177,9 +169,9 @@ export function Week() {
         .map((t) => ({ start: minutesOfDay(t.scheduled_time!), end: minutesOfDay(t.scheduled_time!) + t.duration_min }))
       const isFree = (m: number) => !taken.some((o) => o.start < m + dur && o.end > m)
 
-      let minute = snap(raw)
+      // Dropping on the day row has no vertical meaning, so start from the first free hour.
+      let minute = kind === 'track' ? snap(yToMinute(spans, ratio * total)) : DAY_START
       if (!isFree(minute)) {
-        // Walk outwards an hour at a time rather than silently overlapping.
         for (let step = 60; step <= DAY_END - DAY_START; step += 60) {
           const up = minute + step
           const down = minute - step
@@ -194,12 +186,27 @@ export function Week() {
         }
       }
 
-      const time = toHHMM(minute)
-      if (task.scheduled_date === date && task.scheduled_time === time) return
-      await updateTask(task.id, { scheduled_date: date, scheduled_time: time })
-      toast(`${formatShort(date)} · ${formatMinutesOfDay(minute)}`, 'success')
+      setPending({ task, date, start: toHHMM(minute) })
     },
-    [updateTask, toast, tasks, commitments, projects, preferences],
+    [tasks, commitments, projects, preferences, updateTask, toast],
+  )
+
+  const confirmSchedule = useCallback(
+    async (startTime: string, durationMin: number) => {
+      if (!pending) return
+      await updateTask(pending.task.id, {
+        scheduled_date: pending.date,
+        scheduled_time: startTime,
+        duration_min: durationMin,
+      })
+      toast(
+        `${formatShort(pending.date)} · ${formatMinutesOfDay(minutesOfDay(startTime))}–${formatMinutesOfDay(
+          minutesOfDay(startTime) + durationMin,
+        )}`,
+        'success',
+      )
+    },
+    [pending, updateTask, toast],
   )
 
   return (
@@ -271,6 +278,16 @@ export function Week() {
           open={addFor !== null}
           onClose={() => setAddFor(null)}
           defaults={addFor ? { scheduled_date: addFor } : undefined}
+        />
+        <ScheduleDialog
+          open={pending !== null}
+          task={pending?.task ?? null}
+          date={pending?.date ?? today()}
+          defaultStart={pending?.start ?? '18:00'}
+          dayStart={DAY_START}
+          dayEnd={DAY_END}
+          onClose={() => setPending(null)}
+          onConfirm={confirmSchedule}
         />
         <AnimatePresence>{showReview && <WeeklyReview onClose={() => setShowReview(false)} />}</AnimatePresence>
       </div>

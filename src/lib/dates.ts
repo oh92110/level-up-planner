@@ -66,6 +66,13 @@ export function minutesOfDay(t: string): number {
   return h * 60 + m
 }
 
+/** Selectable clock times between two minutes-of-day, for start/finish pickers. */
+export function timeOptions(fromMin: number, toMin: number, step = 15): { value: string; label: string }[] {
+  const out: { value: string; label: string }[] = []
+  for (let m = fromMin; m <= toMin; m += step) out.push({ value: toHHMM(m), label: formatMinutesOfDay(m) })
+  return out
+}
+
 /** Minutes-of-day back to the "HH:MM" shape the database stores. */
 export function toHHMM(min: number): string {
   const h = Math.floor(min / 60) % 24
