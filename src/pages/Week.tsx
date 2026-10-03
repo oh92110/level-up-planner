@@ -346,7 +346,7 @@ function HourBlocks({
   const nowHour = Math.floor(nowMinutes() / 60) * 60
 
   return (
-    <div className="space-y-1 p-3 sm:p-4">
+    <div className="space-y-1 px-1 pb-3 pt-1">
       {HOURS.map((h) => {
         const hourEnd = h + 60
         const commitment = timed.find((c) => c.start < hourEnd && c.end > h)
@@ -368,11 +368,11 @@ function HourBlocks({
           <DropZone
             key={h}
             id={`hour|${date}|${h}`}
-            className={`drop-lane group flex items-stretch gap-3 rounded-lg px-3 transition-colors ${
+            className={`drop-lane group flex min-h-[44px] items-stretch gap-3 rounded-lg px-4 transition-colors ${
               commitment ? 'bg-ink-850/60' : 'bg-ink-900/60 hover:bg-ink-850/60'
             } ${live ? 'ring-1 ring-cyan/40' : ''}`}
           >
-            <div className="flex w-14 shrink-0 items-start pt-2.5">
+            <div className="flex w-12 shrink-0 items-start pt-3">
               <span className={`mono-num text-[11px] ${live ? 'text-cyan' : 'text-slate-600'}`}>
                 {formatMinutesOfDay(h)}
               </span>
@@ -400,7 +400,7 @@ function HourBlocks({
               ))}
 
               {continues.map((t) => (
-                <p key={t.id} className="truncate border-l-2 border-ink-700 py-0.5 pl-2 text-[12px] text-slate-600">
+                <p key={t.id} className="flex min-h-[26px] items-center truncate border-l-2 border-ink-700 pl-2 text-[12px] leading-tight text-slate-600">
                   {t.name}
                   <span className="mono-num ml-2 text-[10px]">
                     until {formatMinutesOfDay(minutesOfDay(t.scheduled_time!) + t.duration_min)}
