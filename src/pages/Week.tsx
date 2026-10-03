@@ -8,11 +8,9 @@ import { MissedTaskPrompt } from '../components/MissedTaskPrompt'
 import { ScheduleDialog } from '../components/ScheduleDialog'
 import { WeeklyReview } from './WeeklyReview'
 import { useToast } from '../components/Toast'
-import { daySchedule, rankTasks } from '../lib/engine'
-import type { DaySchedule, PlacedTask } from '../lib/engine'
+import { rankTasks } from '../lib/engine'
 import {
   addDays,
-  formatDuration,
   formatMinutesOfDay,
   formatShort,
   fromISO,
@@ -25,102 +23,12 @@ import {
   weekdayOf,
 } from '../lib/dates'
 import { WEEKDAYS_SHORT } from '../lib/types'
-import type { Commitment, Preferences, Task } from '../lib/types'
+import type { Task } from '../lib/types'
 
-/** Every hour, 6 AM through 11 PM. */
+/** One block per hour, 6 AM through 11 PM. */
 const DAY_START = 6 * 60
 const DAY_END = 23 * 60
-const HOUR_H = 40
-const PPM = HOUR_H / 60
-
-const HOURS = Array.from({ length: (DAY_END - DAY_START) / 60 + 1 }, (_, i) => DAY_START + i * 60)
-
-/** Commitments at least this long fold into a compact band instead of eating the day. */
-const COLLAPSE_MIN = 3 * 60
-const COLLAPSED_H = 44
-
-const BAND_ROW = 28
-
-interface Span {
-  start: number
-  end: number
-  kind: 'commitment' | 'free'
-  commitment?: Commitment
-  collapsed: boolean
-  /** Tasks falling inside a folded band — listed in it rather than positioned. */
-  inner: PlacedTask[]
-  top: number
-  height: number
-}
-
-/**
- * The day as stacked spans. Long commitments collapse to a fixed band, so the
- * minute-to-pixel scale is piecewise — everything positional goes through
- * minuteToY / yToMinute rather than multiplying by PPM.
- *
- * Tasks that fall inside a folded band are listed inside it, so folding never
- * hides anything.
- */
-function buildLayout(schedule: DaySchedule, placed: PlacedTask[]): { spans: Span[]; total: number } {
-  const timed = schedule.segments
-    .filter((s) => s.kind === 'commitment')
-    .map((s) => ({
-      start: Math.max(DAY_START, s.start),
-      end: Math.min(DAY_END, s.end),
-      commitment: s.commitment!,
-    }))
-    .filter((s) => s.end > s.start)
-    .sort((a, b) => a.start - b.start)
-
-  const raw: Omit<Span, 'top' | 'height'>[] = []
-  let cursor = DAY_START
-  for (const c of timed) {
-    if (c.start > cursor) raw.push({ start: cursor, end: c.start, kind: 'free', collapsed: false, inner: [] })
-    if (c.end <= cursor) continue
-    const start = Math.max(c.start, cursor)
-    const collapsed = c.end - start >= COLLAPSE_MIN
-    raw.push({
-      start,
-      end: c.end,
-      kind: 'commitment',
-      commitment: c.commitment,
-      collapsed,
-      inner: collapsed ? placed.filter((p) => p.start >= start && p.start < c.end) : [],
-    })
-    cursor = c.end
-  }
-  if (cursor < DAY_END) raw.push({ start: cursor, end: DAY_END, kind: 'free', collapsed: false, inner: [] })
-
-  const spans: Span[] = []
-  let top = 0
-  for (const r of raw) {
-    const height = r.collapsed ? COLLAPSED_H + r.inner.length * BAND_ROW : (r.end - r.start) * PPM
-    spans.push({ ...r, top, height })
-    top += height
-  }
-  return { spans, total: top }
-}
-
-function minuteToY(spans: Span[], minute: number): number {
-  const m = Math.max(DAY_START, Math.min(DAY_END, minute))
-  for (const s of spans) {
-    if (m >= s.start && m < s.end) return s.top + ((m - s.start) / (s.end - s.start)) * s.height
-  }
-  const last = spans[spans.length - 1]
-  return last ? last.top + last.height : 0
-}
-
-function yToMinute(spans: Span[], px: number): number {
-  for (const s of spans) {
-    if (px >= s.top && px < s.top + s.height) {
-      const f = s.height > 0 ? (px - s.top) / s.height : 0
-      return s.start + f * (s.end - s.start)
-    }
-  }
-  return px <= 0 ? DAY_START : DAY_END
-}
-
-const allPlaced = (schedule: DaySchedule): PlacedTask[] => schedule.segments.flatMap((s) => s.tasks)
+const HOURS = Array.from({ length: (DAY_END - DAY_START) / 60 }, (_, i) => DAY_START + i * 60)
 
 function weekNumber(iso: string): number {
   const d = fromISO(iso)
@@ -130,10 +38,10 @@ function weekNumber(iso: string): number {
 }
 
 export function Week() {
-  const { tasks, commitments, projects, reviews, preferences, updateTask } = useStore()
+  const { tasks, reviews, updateTask } = useStore()
   const toast = useToast()
   const [offset, setOffset] = useState(0)
-  const [addFor, setAddFor] = useState<string | null>(null)
+  const [addFor, setAddFor] = useState<{ date: string; time?: string } | null>(null)
   const [showReview, setShowReview] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(today())
   const [pending, setPending] = useState<{ task: Task; date: string; start: string } | null>(null)
@@ -144,8 +52,22 @@ export function Week() {
   const dates = weekDates(start)
   const reviewDone = reviews.some((r) => r.week_start === weekStart(ref))
 
+  /** Hours already taken by a task, so a drop doesn't land on top of one. */
+  const firstFreeHour = useCallback(
+    (date: string, task: Task, from: number) => {
+      const taken = tasks
+        .filter((t) => t.id !== task.id && !t.completed && t.scheduled_date === date && t.scheduled_time != null)
+        .map((t) => ({ s: minutesOfDay(t.scheduled_time!), e: minutesOfDay(t.scheduled_time!) + t.duration_min }))
+      const free = (m: number) => !taken.some((o) => o.s < m + task.duration_min && o.e > m)
+      if (free(from)) return from
+      for (let h = DAY_START; h < DAY_END; h += 60) if (free(h)) return h
+      return from
+    },
+    [tasks],
+  )
+
   const handleDrop = useCallback(
-    async (task: Task, zoneId: string, ratio: number) => {
+    async (task: Task, zoneId: string) => {
       if (zoneId === 'backlog') {
         if (!task.scheduled_date && !task.scheduled_time) return
         await updateTask(task.id, { scheduled_date: null, scheduled_time: null })
@@ -153,42 +75,15 @@ export function Week() {
         return
       }
 
-      const [kind, date] = zoneId.split('|')
-      if (kind !== 'day' && kind !== 'track') return
+      const [kind, date, hourStr] = zoneId.split('|')
+      if (kind !== 'hour' && kind !== 'day') return
 
-      // Where the drop landed, used only to preselect the start time — the
-      // actual start and finish are confirmed in the dialog.
-      const schedule = daySchedule(date, commitments, tasks, projects, preferences)
-      const { spans, total } = buildLayout(schedule, allPlaced(schedule))
-      const dur = task.duration_min
-      const lastHour = Math.floor((DAY_END - dur) / 60) * 60
-      const snap = (m: number) => Math.max(DAY_START, Math.min(lastHour, Math.round(m / 60) * 60))
-
-      const taken = tasks
-        .filter((t) => t.id !== task.id && !t.completed && t.scheduled_date === date && t.scheduled_time != null)
-        .map((t) => ({ start: minutesOfDay(t.scheduled_time!), end: minutesOfDay(t.scheduled_time!) + t.duration_min }))
-      const isFree = (m: number) => !taken.some((o) => o.start < m + dur && o.end > m)
-
-      // Dropping on the day row has no vertical meaning, so start from the first free hour.
-      let minute = kind === 'track' ? snap(yToMinute(spans, ratio * total)) : DAY_START
-      if (!isFree(minute)) {
-        for (let step = 60; step <= DAY_END - DAY_START; step += 60) {
-          const up = minute + step
-          const down = minute - step
-          if (up <= lastHour && isFree(up)) {
-            minute = up
-            break
-          }
-          if (down >= DAY_START && isFree(down)) {
-            minute = down
-            break
-          }
-        }
-      }
-
-      setPending({ task, date, start: toHHMM(minute) })
+      // Dropping on an hour block starts there; the day row has no hour, so
+      // fall back to the first free one. Either way the dialog confirms it.
+      const from = kind === 'hour' ? Number(hourStr) : DAY_START
+      setPending({ task, date, start: toHHMM(firstFreeHour(date, task, from)) })
     },
-    [tasks, commitments, projects, preferences, updateTask, toast],
+    [updateTask, toast, firstFreeHour],
   )
 
   const confirmSchedule = useCallback(
@@ -265,19 +160,22 @@ export function Week() {
                 isToday={offset === 0 && date === ref}
                 expanded={expanded === date}
                 onToggle={() => setExpanded((e) => (e === date ? null : date))}
-                onAdd={() => setAddFor(date)}
-                preferences={preferences}
+                onAddAt={(time) => setAddFor({ date, time })}
               />
             ))}
           </div>
 
-          <Sidebar onAdd={() => setAddFor('')} />
+          <Sidebar onAdd={() => setAddFor({ date: '' })} />
         </div>
 
         <TaskForm
           open={addFor !== null}
           onClose={() => setAddFor(null)}
-          defaults={addFor ? { scheduled_date: addFor } : undefined}
+          defaults={
+            addFor?.date
+              ? { scheduled_date: addFor.date, ...(addFor.time ? { scheduled_time: addFor.time } : {}) }
+              : undefined
+          }
         />
         <ScheduleDialog
           open={pending !== null}
@@ -295,32 +193,51 @@ export function Week() {
   )
 }
 
+interface TimedCommitment {
+  id: string
+  label: string
+  start: number
+  end: number
+}
+
 function DayCard({
   date,
   isToday,
   expanded,
   onToggle,
-  onAdd,
-  preferences,
+  onAddAt,
 }: {
   date: string
   isToday: boolean
   expanded: boolean
   onToggle: () => void
-  onAdd: () => void
-  preferences: Preferences | null
+  onAddAt: (time?: string) => void
 }) {
-  const { tasks, commitments, projects } = useStore()
+  const { tasks, commitments } = useStore()
   const wd = weekdayOf(date)
 
-  const schedule = useMemo(
-    () => daySchedule(date, commitments, tasks, projects, preferences),
-    [date, commitments, tasks, projects, preferences],
+  const dayCommitments = useMemo(() => commitments.filter((c) => c.weekday === wd && c.active), [commitments, wd])
+  const timed = useMemo<TimedCommitment[]>(
+    () =>
+      dayCommitments
+        .filter((c) => c.start_time && c.end_time)
+        .map((c) => ({
+          id: c.id,
+          label: c.label,
+          start: minutesOfDay(c.start_time!),
+          end: minutesOfDay(c.end_time!),
+        }))
+        .sort((a, b) => a.start - b.start),
+    [dayCommitments],
   )
+  const anytime = useMemo(() => dayCommitments.filter((c) => !c.start_time || !c.end_time), [dayCommitments])
 
   const dayTasks = useMemo(() => tasks.filter((t) => t.scheduled_date === date), [tasks, date])
-  const open = dayTasks.filter((t) => !t.completed).length
-  const done = dayTasks.length - open
+  const openTasks = dayTasks.filter((t) => !t.completed)
+  const doneTasks = dayTasks.filter((t) => t.completed)
+  // A task sits in an hour because of its own time, never because of packing.
+  const timedTasks = openTasks.filter((t) => t.scheduled_time != null)
+  const untimed = openTasks.filter((t) => t.scheduled_time == null)
 
   return (
     <div
@@ -346,8 +263,10 @@ function DayCard({
           <span className="flex-1" />
 
           <div className="flex shrink-0 items-center gap-4">
-            {open > 0 && <span className="mono-num text-xs text-slate-300">{open} open</span>}
-            {done > 0 && <span className="mono-num text-xs text-lo/70">{done} done</span>}
+            {openTasks.length > 0 && (
+              <span className="mono-num text-xs text-slate-300">{openTasks.length} open</span>
+            )}
+            {doneTasks.length > 0 && <span className="mono-num text-xs text-lo/70">{doneTasks.length} done</span>}
             <motion.span
               animate={{ rotate: expanded ? 180 : 0 }}
               transition={{ duration: 0.18 }}
@@ -368,9 +287,9 @@ function DayCard({
             transition={{ duration: 0.22 }}
             style={{ overflow: 'hidden' }}
           >
-            {schedule.anytime.length > 0 && (
+            {anytime.length > 0 && (
               <div className="flex flex-wrap gap-1.5 px-5 pt-3">
-                {schedule.anytime.map((c) => (
+                {anytime.map((c) => (
                   <span key={c.id} className="rounded-md bg-ink-850 px-2.5 py-1 text-[12px] text-slate-400">
                     {c.label}
                   </span>
@@ -378,31 +297,26 @@ function DayCard({
               </div>
             )}
 
-            <DayTrack date={date} isToday={isToday} schedule={schedule} />
-
-            {schedule.overflow.length > 0 && (
-              <div className="mx-5 mb-4 space-y-1.5 rounded-lg border border-med/20 bg-med/[0.05] p-2.5">
-                <p className="mono-num px-0.5 pb-0.5 text-[10px] uppercase tracking-wider text-med">
-                  No room left today
-                </p>
-                {schedule.overflow.map((t) => (
-                  <DraggableTask key={t.id} task={t} tone="overflow" showProject={false} />
+            {untimed.length > 0 && (
+              <div className="mx-5 mt-3 space-y-1.5 rounded-lg bg-ink-850/50 p-2.5">
+                <p className="mono-num px-0.5 text-[10px] uppercase tracking-wider text-slate-500">No time set</p>
+                {untimed.map((t) => (
+                  <DraggableTask key={t.id} task={t} showProject={false} />
                 ))}
               </div>
             )}
 
-            <div className="flex items-center gap-3 px-5 pb-5">
-              <button onClick={onAdd} className="btn-quiet px-2.5 py-1.5 text-[13px]">
-                + Task
-              </button>
-              {schedule.done.length > 0 && (
-                <span className="mono-num text-[11px] text-slate-600">{schedule.done.length} done</span>
-              )}
-            </div>
+            <HourBlocks
+              date={date}
+              isToday={isToday}
+              timed={timed}
+              tasks={timedTasks}
+              onAddAt={onAddAt}
+            />
 
-            {schedule.done.length > 0 && (
+            {doneTasks.length > 0 && (
               <div className="mx-5 mb-5 space-y-1.5 opacity-50">
-                {schedule.done.map((t) => (
+                {doneTasks.map((t) => (
                   <DraggableTask key={t.id} task={t} draggable={false} showProject={false} />
                 ))}
               </div>
@@ -414,99 +328,103 @@ function DayCard({
   )
 }
 
-/** 6 AM – 11 PM, with long commitments folded. Free time is empty space, not a box. */
-function DayTrack({ date, isToday, schedule }: { date: string; isToday: boolean; schedule: DaySchedule }) {
+/** A separate, droppable block for every hour of the day. */
+function HourBlocks({
+  date,
+  isToday,
+  timed,
+  tasks,
+  onAddAt,
+}: {
+  date: string
+  isToday: boolean
+  timed: TimedCommitment[]
+  tasks: Task[]
+  onAddAt: (time?: string) => void
+}) {
   const { dragging } = useDrag()
-  const now = nowMinutes()
-  const showNow = isToday && now >= DAY_START && now <= DAY_END
-
-  const placed = useMemo(() => allPlaced(schedule), [schedule])
-  const { spans, total } = useMemo(() => buildLayout(schedule, placed), [schedule, placed])
-
-  // Anything listed inside a folded band must not also be positioned on the axis.
-  const banded = new Set(spans.flatMap((s) => s.inner.map((p) => p.task.id)))
-  const onAxis = placed.filter((p) => !banded.has(p.task.id))
-
-  const Y = (m: number) => minuteToY(spans, m)
-  /** Hours hidden inside a folded band would stack on top of each other. */
-  const visibleHours = HOURS.filter((m) => {
-    const s = spans.find((sp) => m >= sp.start && m < sp.end)
-    return !s || !s.collapsed || m === s.start
-  })
+  const nowHour = Math.floor(nowMinutes() / 60) * 60
 
   return (
-    <div className="relative px-5 pt-1 pb-5">
-      {visibleHours.map((m) => (
-        <div key={m} className="pointer-events-none absolute left-5" style={{ top: Y(m) }}>
-          <span className="mono-num absolute left-0 -top-[8px] w-12 text-right text-[11px] text-slate-600">
-            {formatMinutesOfDay(m)}
-          </span>
-          <span className="absolute left-[3.5rem] h-px w-2 bg-ink-700" />
-        </div>
-      ))}
+    <div className="space-y-1 p-3 sm:p-4">
+      {HOURS.map((h) => {
+        const hourEnd = h + 60
+        const commitment = timed.find((c) => c.start < hourEnd && c.end > h)
+        // Label a commitment once, on the hour it begins, rather than repeating
+        // "Work" down eleven blocks.
+        const opens = commitment != null && commitment.start < hourEnd && commitment.start >= h
+        const startsHere = tasks.filter((t) => {
+          const s = minutesOfDay(t.scheduled_time!)
+          return s >= h && s < hourEnd
+        })
+        const continues = tasks.filter((t) => {
+          const s = minutesOfDay(t.scheduled_time!)
+          return s < h && s + t.duration_min > h
+        })
+        const live = isToday && h === nowHour
+        const empty = startsHere.length === 0 && continues.length === 0 && !opens
 
-      <DropZone
-        id={`track|${date}`}
-        className={`drop-track relative ml-[4.75rem] rounded-lg transition-colors ${dragging ? 'bg-ink-800/25' : ''}`}
-        style={{ height: total }}
-      >
-        {spans
-          .filter((s) => s.kind === 'commitment')
-          .map((s) =>
-            s.collapsed ? (
-              <div
-                key={s.commitment!.id}
-                className="absolute inset-x-0 overflow-hidden rounded-lg border border-ink-800 bg-ink-850/50"
-                style={{ top: s.top, height: s.height }}
-              >
-                <div className="flex items-center gap-3 px-3.5" style={{ height: COLLAPSED_H }}>
-                  <span className="truncate text-[13px] font-medium text-slate-400">{s.commitment!.label}</span>
-                  <span className="mono-num ml-auto shrink-0 text-[11px] text-slate-600">
-                    {formatMinutesOfDay(s.start)} – {formatMinutesOfDay(s.end)} · {formatDuration(s.end - s.start)}
-                  </span>
-                </div>
-                {s.inner.length > 0 && (
-                  <div className="space-y-0.5 px-1.5 pb-1.5">
-                    {s.inner.map((p) => (
-                      <div key={p.task.id} style={{ height: BAND_ROW - 4 }}>
-                        <DraggableTask task={p.task} at={p.start} pinned={p.pinned} showProject={false} dense />
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div
-                key={s.commitment!.id}
-                className="absolute inset-x-0 overflow-hidden rounded-lg bg-ink-850/70 px-3.5 py-2.5"
-                style={{ top: s.top, height: Math.max(28, s.height) }}
-              >
-                <p className="truncate text-[13px] font-medium leading-tight text-slate-400">{s.commitment!.label}</p>
-                <p className="mono-num mt-1 text-[11px] text-slate-600">
-                  {formatMinutesOfDay(s.start)} – {formatMinutesOfDay(s.end)}
-                </p>
-              </div>
-            ),
-          )}
-
-        {onAxis.map((p) => (
-          <div
-            key={p.task.id}
-            className="absolute inset-x-0 z-10"
-            style={{ top: Y(p.start), height: Math.max(24, Y(p.start + p.task.duration_min) - Y(p.start)) }}
+        return (
+          <DropZone
+            key={h}
+            id={`hour|${date}|${h}`}
+            className={`drop-lane group flex items-stretch gap-3 rounded-lg px-3 transition-colors ${
+              commitment ? 'bg-ink-850/60' : 'bg-ink-900/60 hover:bg-ink-850/60'
+            } ${live ? 'ring-1 ring-cyan/40' : ''}`}
           >
-            <DraggableTask task={p.task} pinned={p.pinned} showProject={false} dense />
-          </div>
-        ))}
-
-        {showNow && (
-          <div className="pointer-events-none absolute inset-x-0 z-20" style={{ top: Y(now) }}>
-            <div className="relative h-px bg-cyan">
-              <span className="absolute -left-1 -top-[3px] h-[7px] w-[7px] rounded-full bg-cyan" />
+            <div className="flex w-14 shrink-0 items-start pt-2.5">
+              <span className={`mono-num text-[11px] ${live ? 'text-cyan' : 'text-slate-600'}`}>
+                {formatMinutesOfDay(h)}
+              </span>
             </div>
-          </div>
-        )}
-      </DropZone>
+
+            <div className="min-w-0 flex-1 space-y-1 py-1.5">
+              {opens && (
+                <p className="truncate py-1 text-[13px] text-slate-500">
+                  {commitment!.label}
+                  <span className="mono-num ml-2 text-[11px] text-slate-600">
+                    {formatMinutesOfDay(commitment!.start)}–{formatMinutesOfDay(commitment!.end)}
+                  </span>
+                </p>
+              )}
+
+              {startsHere.map((t) => (
+                <DraggableTask
+                  key={t.id}
+                  task={t}
+                  at={minutesOfDay(t.scheduled_time!)}
+                  pinned
+                  showProject={false}
+                  dense
+                />
+              ))}
+
+              {continues.map((t) => (
+                <p key={t.id} className="truncate border-l-2 border-ink-700 py-0.5 pl-2 text-[12px] text-slate-600">
+                  {t.name}
+                  <span className="mono-num ml-2 text-[10px]">
+                    until {formatMinutesOfDay(minutesOfDay(t.scheduled_time!) + t.duration_min)}
+                  </span>
+                </p>
+              ))}
+
+              {empty && (
+                <button
+                  onClick={() => onAddAt(toHHMM(h))}
+                  className="flex h-7 w-full items-center text-left text-[12px] text-slate-700
+                    opacity-0 transition-opacity focus:opacity-100 group-hover:opacity-100"
+                >
+                  {dragging ? '' : `+ Add at ${formatMinutesOfDay(h)}`}
+                </button>
+              )}
+            </div>
+          </DropZone>
+        )
+      })}
+
+      <button onClick={() => onAddAt()} className="btn-quiet mt-1 px-2.5 py-1.5 text-[13px]">
+        + Task
+      </button>
     </div>
   )
 }
@@ -553,7 +471,7 @@ function Sidebar({ onAdd }: { onAdd: () => void }) {
       </DropZone>
 
       <p className="mt-3 px-0.5 text-xs leading-relaxed text-slate-600">
-        Drag onto the hours to set a time, onto a day row for “anytime”, or back here to unschedule.
+        Drag a task onto an hour to pick its start and finish, or back here to unschedule.
       </p>
 
       {completed.length > 0 && (
